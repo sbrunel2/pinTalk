@@ -79,8 +79,7 @@ async function uiCreateGroup(e) {
             // ÉTAPE 1 : Créer le Groupe
             const resG = await fetchAuth('/api/groups', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name.trim(), ownerEmail: user.email })
+                body: JSON.stringify({ name: name.trim()})
             });
             const newGroup = await resG.json();
 
@@ -88,11 +87,9 @@ async function uiCreateGroup(e) {
                 // ÉTAPE 2 : Créer le Rayon DEFAUT
                 const resD = await fetchAuth('/api/devices', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         name: "DEFAUT", 
-                        groupId: newGroup._id, 
-                        ownerEmail: user.email 
+                        groupId: newGroup._id
                     })
                 });
                 const newDev = await resD.json();
@@ -100,11 +97,9 @@ async function uiCreateGroup(e) {
                 // ÉTAPE 3 : Créer le Post-it DEFAUT
                 await fetchAuth('/api/postits', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         name: "DEFAUT", 
                         deviceId: newDev._id, 
-                        ownerEmail: user.email,
                         pickupDate: new Date().toISOString()
                     })
                 });
@@ -128,59 +123,6 @@ async function uiCreateGroup(e) {
     });
 }
 
-/*async function uiCreateGroup(e) {
-    if(e) e.stopPropagation();
-    
-    // 1. On récupère l'utilisateur (Sécurité V3)
-    const user = JSON.parse(localStorage.getItem('user'));
-    if (!user || !user.email) return alert("Erreur : session expirée. Reconnectez-vous.");
-
-    // 2. Fenêtre HTML personnalisée
-    openCustomPrompt("Nom du nouveau groupe (ex: BOUCHERIE, CUISINE...)", "", async (name) => {
-        if (!name || name.trim() === "") return;
-
-        try {
-            const res = await fetch('/api/groups', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    name: name.trim(), 
-                    ownerEmail: user.email 
-                })
-            });
-
-            if (res.ok) {
-                const data = await res.json();
-                lastCreatedId = data._id; // Ton surlignage est préservé
-
-                // --- AJOUT : MISE À JOUR & SÉLECTION FORCÉE ---
-                await loadGroups(); // On recharge la liste
-                
-                const sel = document.getElementById('sel-group');
-                if (sel) {
-                    sel.value = data._id; // On force le sélecteur sur le nouveau groupe
-                    await loadGroupData(data._id); // On charge les données (vides) de ce nouveau groupe
-                }
-                // ----------------------------------------------
-
-                // 3. Délai pour stabiliser l'affichage
-                setTimeout(async () => {
-                    await refreshParamsLists(); 
-                    const checkG = document.getElementById('check-g');
-                    if (checkG) checkG.checked = true;
-                }, 300);
-
-                setTimeout(() => { lastCreatedId = null; }, 2000);
-            } else {
-                alert("Erreur lors de la création du groupe.");
-            }
-        } catch (err) {
-            console.error("Erreur réseau uiCreateGroup:", err);
-            alert("Erreur de connexion au serveur.");
-        }
-    });
-}*/
-
 async function uiCreateDevice(e) {
     if(e) e.stopPropagation();
     
@@ -200,12 +142,10 @@ async function uiCreateDevice(e) {
         try {
             const res = await fetchAuth('/api/devices', { 
                 method: 'POST', 
-                headers: {'Content-Type':'application/json'}, 
                 body: JSON.stringify({ 
                     groupId: gid, 
                     name: name.trim(), 
-                    mac: "00",
-                    ownerEmail: user.email 
+                    mac: "00"
                 })
             });
 
@@ -233,64 +173,6 @@ async function uiCreateDevice(e) {
         }
     });
 }
-
-/*async function uiCreateDevice(e) {
-    if(e) e.stopPropagation();
-    
-    // 1. Vérification du groupe avec sécurité renforcée
-    const selGroup = document.getElementById('sel-group');
-    const gid = (selGroup && selGroup.value && selGroup.value !== "") ? selGroup.value : null;
-    
-    if(!gid) {
-        return alert("Veuillez attendre le chargement du groupe ou en sélectionner un.");
-    }
-
-    // 2. RÉCUPÉRATION DE L'UTILISATEUR
-    const user = JSON.parse(localStorage.getItem('user'));
-    if (!user || !user.email) return alert("Erreur : session expirée. Reconnectez-vous.");
-
-    // 3. Fenêtre personnalisée
-    openCustomPrompt("Nom du nouveau rayon", "", async (name) => {
-        if(!name || name.trim() === "") return;
-
-        try {
-            const res = await fetch('/api/devices', { 
-                method: 'POST', 
-                headers: {'Content-Type':'application/json'}, 
-                body: JSON.stringify({ 
-                    groupId: gid, 
-                    name: name.trim(), 
-                    mac: "00",
-                    ownerEmail: user.email 
-                })
-            });
-
-            if(res.ok) {
-                const data = await res.json();
-                lastCreatedId = data._id; 
-
-                // Mise à jour des données du chat (on attend la fin)
-                await loadGroupData(gid); 
-                
-                // Rafraîchissement des paramètres (on attend aussi)
-                await refreshParamsLists();
-
-                // On ouvre l'accordéon des rayons
-                const checkD = document.getElementById('check-d');
-                if (checkD) checkD.checked = true;
-
-                // Effet visuel de flash
-                setTimeout(() => { lastCreatedId = null; }, 2000);
-            } else {
-                const txt = await res.text();
-                alert("Erreur serveur : " + txt);
-            }
-        } catch (err) {
-            console.error("Erreur création rayon:", err);
-            alert("Erreur réseau : Impossible de joindre le serveur.");
-        }
-    });
-}*/
 
 function openCustomPrompt(title, defaultValue, onConfirm) {
     document.getElementById('prompt-title').innerText = title;
@@ -390,8 +272,8 @@ async function refreshParamsLists() {
     let currentGid = (selGroup && selGroup.value) ? selGroup.value : null;
 
     // 1. On charge les GROUPES (nécessaire pour la liste des réglages)
-    const gRes = await fetchAuth(`/api/groups?${emailParam}`);
-    const groups = await gRes.json();
+	const gRes = await fetchAuth('/api/groups');
+	const groups = await gRes.json();
 
     // Si on n'a aucune sélection mais qu'on a des groupes, on prend le premier
     if (!currentGid && groups.length > 0) {
@@ -413,7 +295,7 @@ async function refreshParamsLists() {
 
     // 3. Chargement des RAYONS (On arrive ici seulement si currentGid existe)
     try {
-        const dRes = await fetchAuth(`/api/devices?groupId=${currentGid}&${emailParam}`);
+        const dRes = await fetchAuth(`/api/devices?groupId=${currentGid}`);
         const devs = await dRes.json();
         const selDev = document.getElementById('sel-dev');
         const currentDid = selDev ? selDev.value : null;
@@ -422,7 +304,7 @@ async function refreshParamsLists() {
         // 4. Chargement des POST-ITS
         const listPos = document.getElementById('list-postits-del');
         if (currentDid && currentDid !== "") {
-            const pRes = await fetchAuth(`/api/postits?deviceId=${currentDid}&${emailParam}`);
+            const pRes = await fetchAuth(`/api/postits?deviceId=${currentDid}`);
             const ps = await pRes.json();
             const selPos = document.getElementById('sel-pos');
             const currentPid = selPos ? selPos.value : null;
@@ -450,246 +332,11 @@ async function resetDateFilter() {
     }
 }
 
-/*async function loadGroups(idToSelect = null) {
-    const user = JSON.parse(localStorage.getItem('user'));
-    if (!user || !user.email) return;
-
-    try {
-        const res = await fetch(`/api/groups?email=${encodeURIComponent(user.email)}`);
-        const groups = await res.json();
-        const sel = document.getElementById('sel-group');
-        const headG = document.getElementById('current-group-name');
-
-        if (sel && groups.length > 0) {
-            // Remplissage du menu
-            sel.innerHTML = groups.map(g => `<option value="${g._id}">${g.name}</option>`).join('');
-            
-            // Sélection de l'ID (celui demandé, ou le premier de la liste)
-            const targetId = idToSelect || groups[0]._id;
-            sel.value = targetId;
-
-            // MISE À JOUR DU HEADER (On le fait ici, c'est direct)
-            const found = groups.find(g => g._id === targetId);
-            if (found && headG) headG.innerText = found.name.toUpperCase();
-
-            // ON LANCE LA SUITE (Rayons et Post-its)
-            await syncSelection('group', targetId);
-        } else {
-            // Si plus de groupes
-            if (sel) sel.innerHTML = '<option value="">Aucun groupe</option>';
-            if (headG) headG.innerText = "AUCUN GROUPE";
-            await syncSelection('group', null);
-        }
-        
-        // Relance l'affichage de la liste dans les paramètres
-        if (typeof refreshParamsLists === 'function') refreshParamsLists();
-    } catch (err) {
-        console.error("Erreur loadGroups:", err);
-    }
-}*/
-
-/*async function loadGroups(idToSelect = null) {
-    const user = JSON.parse(localStorage.getItem('user'));
-    if (!user || !user.email) return;
-
-    // --- SÉCURITÉ ABSOLUE : L'OBSERVATEUR ---
-    // Ce petit bloc surveille les changements de sélection et force le header 
-    // même si les fonctions asynchrones se croisent.
-    const syncHeader = () => {
-        const sG = document.getElementById('sel-group');
-        const sD = document.getElementById('sel-dev');
-        const hG = document.getElementById('current-group-name');
-        const hD = document.getElementById('current-device-name');
-        if(hG && sG && sG.selectedIndex !== -1) hG.innerText = sG.options[sG.selectedIndex].text.toUpperCase();
-        if(hD && sD && sD.selectedIndex !== -1) hD.innerText = sD.options[sD.selectedIndex].text.toUpperCase();
-    };
-
-    try {
-        const res = await fetch(`/api/groups?email=${encodeURIComponent(user.email)}`);
-        const groups = await res.json();
-        
-        const sel = document.getElementById('sel-group');
-        const listDiv = document.getElementById('list-groups-del');
-        const headG = document.getElementById('current-group-name'); 
-        
-        if (sel) {
-            if (groups.length > 0) {
-                // 1. Remplissage du select
-                sel.innerHTML = groups.map(g => `<option value="${g._id}">${g.name}</option>`).join('');
-                
-                // 2. Détermination de l'ID à afficher
-                const targetId = idToSelect || sel.value || groups[0]._id;
-                sel.value = targetId;
-				const selectedG = groups.find(g => g._id === targetId);
-				if (selectedG) {
-					const headG = document.getElementById('current-group-name');
-					if (headG) headG.innerText = selectedG.name.toUpperCase();
-					console.log("✅ Header Groupe mis à jour manuellement :", selectedG.name);
-				}
-				
-                // --- MISE À JOUR IMMÉDIATE ---
-                syncHeader();
-
-                // 3. Synchro des données (Rayons/Clients)
-                // On attend la fin de la synchro qui va remplir les rayons
-                await syncSelection('group', targetId);
-                
-                // On re-force après la synchro pour le nom du Rayon
-                syncHeader();
-
-            } else {
-                // --- NETTOYAGE SI VIDE ---
-                sel.innerHTML = '<option value="">Aucun groupe</option>';
-                sel.value = "";
-                if (headG) headG.innerText = "AUCUN GROUPE";
-                
-                const headD = document.getElementById('current-device-name');
-                if (headD) headD.innerText = "AUCUN RAYON";
-                
-                const selDev = document.getElementById('sel-dev');
-                const selPos = document.getElementById('sel-pos');
-                if (selDev) { selDev.innerHTML = '<option value="">Aucun rayon</option>'; selDev.value = ""; }
-                if (selPos) { selPos.innerHTML = '<option value="">Aucun client</option>'; selPos.value = ""; }
-
-                allMsgs = [];
-                if (typeof refreshView === 'function') refreshView();
-            }
-        }
-
-        // --- BLOC LISTDIV (Paramètres - Ton design conservé) ---
-        if (listDiv) {
-            if (groups.length > 0) {
-                listDiv.innerHTML = groups.map(g => {
-                    const isSelected = (idToSelect && g._id === idToSelect) || (sel && sel.value === g._id);
-                    const prefix = isSelected ? '→ ' : '';
-                    return `
-                    <div class="flex justify-between items-center p-2 border-b border-black/10 text-[10px] font-black uppercase ${isSelected ? 'bg-black/5' : ''}">
-                        <span>${prefix}${g.name}</span>
-                        <div class="flex gap-2">
-                            <button onclick="event.stopPropagation(); editName('group', '${g._id}', '${g.name}')" class="text-blue-600 font-bold">🖍️</button>
-                            <button 
-                                onclick="event.stopPropagation(); if(this.innerText==='✕'){ this.innerText='OK?'; this.classList.add('text-orange-500'); setTimeout(()=>{ this.innerText='✕'; this.classList.remove('text-orange-500'); }, 2000); } else { deleteGroup('${g._id}'); }" 
-                                class="text-red-600 px-2 font-bold transition-all">✕</button>
-                        </div>
-                    </div>`;
-                }).join('');
-            } else {
-                listDiv.innerHTML = '<div class="p-3 text-gray-400 italic text-[10px]">Aucun groupe créé</div>';
-            }
-        }
-    } catch (err) {
-        console.error("Erreur loadGroups:", err);
-    }
-}
-
-async function loadGroupData(groupId) {
-    const selDev = document.getElementById('sel-dev');
-    const selPos = document.getElementById('sel-pos');
-    const headG = document.getElementById('current-group-name'); 
-    const headD = document.getElementById('current-device-name');
-
-    if (!groupId || groupId === "" || groupId === "null") {
-        if (selDev) selDev.innerHTML = '<option value="">Aucun rayon</option>';
-        if (selPos) selPos.innerHTML = '<option value="">Aucun client</option>';
-        if (headG) headG.innerText = "AUCUN GROUPE"; // On vide si pas d'ID
-        if (headD) headD.innerText = "AUCUN RAYON";
-        allMsgs = [];
-        await refreshView();
-        return;
-    }
-    try {
-        // 1. Charger les Rayons
-        const resDev = await fetch(`/api/devices?groupId=${groupId}&email=${encodeURIComponent(currentUser.email)}`);
-        const devs = await resDev.json();
-
-        const previousDevId = selDev.value;
-if (devs.length === 0) {
-            selDev.innerHTML = '<option value="">Aucun rayon</option>';
-            selDev.value = "";
-            if (headD) headD.innerText = "AUCUN RAYON";
-            console.log("Header Rayon : Aucun trouvé");
-        } else {
-            // 1. On remplit le select
-            selDev.innerHTML = devs.map(d => `<option value="${d._id}">${truncate(d.name, 30)}</option>`).join('');
-            
-            // 2. On gère la sélection (persistance ou premier de la liste)
-            if (previousDevId && devs.find(d => d._id === previousDevId)) {
-                selDev.value = previousDevId;
-            } else {
-                selDev.value = devs[0]._id;
-            }
-
-            // 3. FORCE LA MISE À JOUR DU TEXTE DANS LE HEADER RAYON
-            if (headD) {
-                const currentDev = devs.find(d => d._id === selDev.value);
-                if (currentDev) {
-                    headD.innerText = currentDev.name.toUpperCase();
-                    console.log("Header Rayon mis à jour :", currentDev.name);
-                }
-            }
-        }
-		
-        // Persistance sélection rayon
-        if (previousDevId && devs.find(d => d._id === previousDevId)) {
-            selDev.value = previousDevId;
-        } else if (devs.length > 0) {
-            selDev.value = devs[0]._id;
-        }
-
-        // 2. Charger les Clients
-        if (selDev.value) {
-            let url = `/api/postits?deviceId=${selDev.value}&email=${encodeURIComponent(currentUser.email)}`;
-            if (filterDate) url += `&filterDate=${filterDate}`;
-
-            const resPos = await fetch(url);
-            let postits = await resPos.json();
-
-            // Filtrage status
-            if (showFinished) {
-                postits = postits.filter(p => p.status === "En caisse" || p.status === "Terminé" || p.status === "Annulé");
-            } else {
-                postits = postits.filter(p => p.status === "En attente" || p.status === "En préparation" || !p.status || p.status === "");
-            }
-
-            postits.sort((a, b) => new Date(a.pickupDate) - new Date(b.pickupDate));
-
-            if (postits.length === 0) {
-                selPos.innerHTML = '<option value="">Aucun client</option>';
-                selPos.value = ""; 
-            } else {
-                selPos.innerHTML = postits.map(p => {
-                    const d = new Date(p.pickupDate);
-                    const time = p.pickupDate ? d.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}) : '??:??';
-                    return `<option value="${p._id}">[${time}] ${truncate(p.name, 20)}</option>`;
-                }).join('');
-                selPos.value = postits[0]._id;
-            }
-        } else {
-            if (selPos) {
-                selPos.innerHTML = '<option value="">Aucun client</option>';
-                selPos.value = "";
-            }
-        }
-
-        // 3. Sync Rayon uniquement (Le groupe a déjà été géré par loadGroups)
-        if (selDev.value) {
-            await syncSelection('device', selDev.value);
-        } else {
-            if (headD) headD.innerText = "AUCUN RAYON";
-        }
-
-        await refreshView();
-		updateVisualHeader();
-    } catch (err) {
-        console.error("Erreur loadGroupData:", err);
-    }
-}*/
 async function loadGroups(idToSelect = null) {
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user || !user.email) return;
 
     try {
-//        const res = await fetch(`/api/groups?email=${encodeURIComponent(user.email)}`);
 		const res = await fetchAuth(`/api/groups`);
         const groups = await res.json();
         const sel = document.getElementById('sel-group');
@@ -700,15 +347,14 @@ async function loadGroups(idToSelect = null) {
             sel.value = targetId;
 
             // --- VÉRIFICATION / CRÉATION RAYON PAR DÉFAUT ---
-            const resDev = await fetchAuth(`/api/devices?groupId=${targetId}&email=${encodeURIComponent(user.email)}`);
+            const resDev = await fetchAuth(`/api/devices?groupId=${targetId}`);
             let devs = await resDev.json();
 
             if (devs.length === 0) {
                 console.log("🛠️ Création du rayon DEFAUT automatique...");
                 const resNewDev = await fetchAuth('/api/devices', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: "DEFAUT", groupId: targetId, ownerEmail: user.email })
+                    body: JSON.stringify({ name: "DEFAUT", groupId: targetId})
                 });
                 const newDev = await resNewDev.json();
                 devs = [newDev];
@@ -716,18 +362,16 @@ async function loadGroups(idToSelect = null) {
 
             // --- VÉRIFICATION / CRÉATION POST-IT PAR DÉFAUT ---
             const firstDevId = devs[0]._id;
-            const resPos = await fetchAuth(`/api/postits?deviceId=${firstDevId}&email=${encodeURIComponent(user.email)}`);
+            const resPos = await fetchAuth(`/api/postits?deviceId=${firstDevId}`);
             let postits = await resPos.json();
 
             if (postits.length === 0) {
                 console.log("🛠️ Création du post-it DEFAUT automatique...");
                 await fetchAuth('/api/postits', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         name: "DEFAUT", 
                         deviceId: firstDevId, 
-                        ownerEmail: user.email,
                         pickupDate: new Date().toISOString()
                     })
                 });
@@ -768,7 +412,6 @@ async function loadGroupData(groupId) {
 
     try {
         // 1. Charger les rayons
-//        const resDev = await fetch(`/api/devices?groupId=${groupId}&email=${encodeURIComponent(currentUser.email)}`);
 		const resDev = await fetchAuth(`/api/devices?groupId=${groupId}`);
         const devs = await resDev.json();
 
@@ -789,7 +432,7 @@ async function loadGroupData(groupId) {
 
         // 2. Charger les post-its du rayon sélectionné
         if (selDev.value) {
-            let url = `/api/postits?deviceId=${selDev.value}&email=${encodeURIComponent(currentUser.email)}`;
+            let url = `/api/postits?deviceId=${selDev.value}`;
             const filterDateEl = document.getElementById('filter-date');
             if (filterDateEl && filterDateEl.value) url += `&filterDate=${filterDateEl.value}`;
 
@@ -811,16 +454,13 @@ async function loadGroupData(groupId) {
                 console.log("🛠️ Création post-it DEFAUT automatique pour rayon", selDev.value);
                 await fetchAuth('/api/postits', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         name: "DEFAUT", 
                         deviceId: selDev.value, 
-                        ownerEmail: currentUser.email,
                         pickupDate: new Date().toISOString()
                     })
                 });
                 // Recharge après création
-                //const resPos2 = await fetch(`/api/postits?deviceId=${selDev.value}&email=${encodeURIComponent(currentUser.email)}`);
 				const resPost2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
                 postits = await resPos2.json();
             }
@@ -1122,7 +762,7 @@ async function refreshView(forceScrollBottom = false) {
 
     // --- E-INK SIMULATION (Articles uniquement, on ignore les images ici) ---
     const forEink = allMsgs.filter(m => m.postitId === pid && !m.isNote && m.type !== 'image');
-const einkHtml = forEink.map(m => {
+	const einkHtml = forEink.map(m => {
 		// On ne verrouille PAS si c'est "Terminé", seulement si c'est payé ou annulé
 		const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");		
 		const boxClass = m.checked ? "bg-green-500 border-black text-white" : "bg-white border-black text-transparent";
@@ -1423,60 +1063,6 @@ async function deleteGroup(id) {
     }
 }
 
-/*async function deleteGroup(id) {
-    try {
-        const res = await fetch(`/api/groups/${id}`, { method: 'DELETE' });
-
-        if (res.ok) {
-            // 1. On vide visuellement le Header immédiatement (Action prioritaire)
-            const headG = document.getElementById('current-group-name');
-            const headD = document.getElementById('current-device-name');
-            if (headG) headG.innerText = "AUCUN GROUPE";
-            if (headD) headD.innerText = "AUCUN RAYON";
-
-            // 2. On vide les sélecteurs principaux
-            const selGrp = document.getElementById('sel-group');
-            const selDev = document.getElementById('sel-dev');
-            const selPos = document.getElementById('sel-pos');
-            
-            if (selGrp) selGrp.value = ""; 
-            if (selDev) { 
-                selDev.innerHTML = '<option value="">Aucun rayon</option>'; 
-                selDev.value = ""; 
-            }
-            if (selPos) { 
-                selPos.innerHTML = '<option value="">Aucun client</option>'; 
-                selPos.value = ""; 
-            }
-
-            // 3. Nettoyage des listes de gestion dans les paramètres
-            const listDevs = document.getElementById('list-devs-del');
-            const listPos = document.getElementById('list-postits-del');
-            if (listDevs) listDevs.innerHTML = '<div class="p-3 text-gray-400 italic text-[10px]">Aucun rayon</div>';
-            if (listPos) listPos.innerHTML = '<div class="p-3 text-gray-400 italic text-[10px]">Aucun client</div>';
-
-            // 4. On recharge la structure (loadGroups gérera le nouveau groupe sélectionné s'il en reste)
-            await loadGroups(); 
-            
-            // 5. On rafraîchit les listes des réglages (UI)
-            if (typeof refreshParamsLists === 'function') {
-                await refreshParamsLists();
-            }
-
-            // 6. On vide le chat local
-            allMsgs = [];
-            if (typeof refreshView === 'function') refreshView();
-            
-        } else {
-            const errorTxt = await res.text();
-            alert("Erreur serveur : " + errorTxt);
-        }
-    } catch (err) {
-        console.error("Erreur critique suppression:", err);
-        alert("Erreur lors de la suppression du groupe.");
-    }
-}*/
-
 async function deleteDevice(id) {
     try {
         const res = await fetchAuth(`/api/devices/${id}`, { method: 'DELETE' });
@@ -1559,7 +1145,6 @@ async function editName(type, id, oldName) {
             try {
                 const res = await fetchAuth(url, {
                     method: 'PUT',
- //                   headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: newName.trim() })
                 });
 
@@ -1611,8 +1196,8 @@ async function submitOrder() {
         name: client,
         orderNumber: orderNum || ("CMD-" + Math.floor(1000 + Math.random() * 9000)),
         phone: phone,
-        pickupDate: date,
-        ownerEmail: user.email // <--- ON AJOUTE L'EMAIL ICI
+        pickupDate: date
+        /// INUTILE désormais avec le fetchAuth ownerEmail: user.email // <--- ON AJOUTE L'EMAIL ICI
     };
 
     let url = editingPostitId ? `/api/postits/details/${editingPostitId}` : '/api/postits';
@@ -1624,7 +1209,6 @@ async function submitOrder() {
 
     const res = await fetchAuth(url, {
         method: method,
-        //headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
     });
 
@@ -1732,9 +1316,7 @@ async function uiJoinGroup() {
     try {
         const res = await fetchAuth('/api/groups/join', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ 
-                email: user.email, 
                 joinCode: code 
             })
         });
@@ -1759,7 +1341,8 @@ async function login() {
     const email = document.getElementById('loginEmail').value;
     const password = document.getElementById('loginPassword').value;
 
-    const res = await fetchAuth('/api/login', {
+    // ⚠️ Utilise bien "fetch" ici, pas "fetchAuth"
+    const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -1769,7 +1352,7 @@ async function login() {
 
     if (res.ok) {
         currentUser = data.user;
-        // 🔑 ON SAUVEGARDE LE TOKEN ICI
+        // On sauvegarde le token qu'on vient de recevoir
         localStorage.setItem('user', JSON.stringify(data.user));
         localStorage.setItem('token', data.token); 
         
