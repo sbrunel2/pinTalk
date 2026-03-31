@@ -164,11 +164,20 @@ const authenticateToken = (req, res, next) => {
 
     if (!token) return res.status(401).send("Accès refusé : Token manquant");
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+	jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) {
+            console.log("Erreur JWT précise :", err.message); // <-- TRÈS IMPORTANT
+            return res.status(403).send("Token invalide ou expiré");
+        }
+        req.user = user;
+        next();
+    });
+	
+/*    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
         if (err) return res.status(403).send("Token invalide ou expiré");
         req.user = user; // On attache l'utilisateur à la requête pour les routes suivantes
         next();
-    });
+    });*/
 };
 
 // On applique le middleware JWT à toutes les routes /api SAUF login et register
