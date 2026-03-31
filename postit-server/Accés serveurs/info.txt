@@ -1,0 +1,9 @@
+28000Ch@rtreS
+brunels2_db_user
+
+mongodb+srv://brunels2_db_user:28000Ch@rtreS@aigenis01.z2lb974.mongodb.net/?appName=aigenis01
+
+Server  Oracle : 141.253.115.76
+
+PS D:\#0-Documents\PlatformIO\postit-server\clé SSH\Private Key> ssh -i .\ssh-key-2026-03-31.key ubuntu@141.253.115.76
+me connecte en ssh au serveur oracle

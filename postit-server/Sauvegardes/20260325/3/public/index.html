@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>e-Postit Pro</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div id="auth-screen">
+        <h1 class="text-4xl font-black mb-10 italic text-center tracking-tighter">e-POSTIT</h1>
+        <input type="text" id="auth-name" placeholder="Nom complet" class="hidden">
+        <input type="email" id="auth-email" placeholder="Email">
+        <input type="password" id="auth-pass" placeholder="Mot de passe">
+        <button onclick="handleAuth()" id="auth-btn" class="btn-black h-14 mt-4 text-lg">Connexion</button>
+        <p class="text-center mt-6 text-[10px] uppercase font-black cursor-pointer opacity-50" onclick="toggleAuthMode()" id="auth-toggle">Pas de compte ? Créer un compte</p>
+    </div>
+
+    <div class="fixed-header">
+        <div class="flex flex-col">
+            <h2 id="page-title" class="font-black italic uppercase text-xl">Direct</h2>
+            <button onclick="logout()" class="text-[9px] uppercase font-black underline opacity-30 text-left">Déconnexion</button>
+        </div>
+        <div id="status-badge">
+            <div>GRP: <span id="st-grp">-</span></div>
+            <div>DEV: <span id="st-dev">-</span></div>
+            <div>POS: <span id="st-pos">-</span></div>
+        </div>
+    </div>
+
+    <div id="viewport">
+        <div class="page" id="p0">
+            <div class="acc-item">
+                <input type="checkbox" id="check-g" class="acc-trigger" checked>
+                <div class="acc-header">
+                    <div class="acc-title-zone">
+                        <label for="check-g" class="acc-label-text">1. Groupes</label>
+                        <button onclick="uiCreateGroup(event)" class="btn-plus-3d">+</button>
+                    </div>
+                    <label for="check-g" class="acc-toggle-icon"></label>
+                </div>
+                <div class="acc-content"><div id="list-groups-del"></div></div>
+            </div>
+            <div class="acc-item">
+                <input type="checkbox" id="check-d" class="acc-trigger">
+                <div class="acc-header">
+                    <div class="acc-title-zone">
+                        <label for="check-d" class="acc-label-text">2. Displays</label>
+                        <button onclick="uiCreateDevice(event)" class="btn-plus-3d">+</button>
+                    </div>
+                    <label for="check-d" class="acc-toggle-icon"></label>
+                </div>
+                <div class="acc-content"><div id="list-devs-del"></div></div>
+            </div>
+            <div class="acc-item">
+                <input type="checkbox" id="check-p" class="acc-trigger">
+                <div class="acc-header">
+                    <div class="acc-title-zone">
+                        <label for="check-p" class="acc-label-text">3. Post-it</label>
+                        <button onclick="uiCreatePostit(event)" class="btn-plus-3d">+</button>
+                    </div>
+                    <label for="check-p" class="acc-toggle-icon"></label>
+                </div>
+                <div class="acc-content"><div id="list-postits-del"></div></div>
+            </div>
+        </div>
+
+        <div class="page px-4 pt-20" id="p1">
+            <div class="flex gap-1 mb-1 items-stretch" style="height: 42px;">
+                <select id="sel-group" onchange="syncSelection('group', this.value)" class="flex-1 px-2 border-2 border-black font-bold text-[10px] uppercase bg-white truncate"></select>
+                <select id="sel-dev" onchange="syncSelection('dev', this.value)" class="flex-1 px-2 border-2 border-black font-bold text-[10px] uppercase bg-white truncate"><option value="">-- Rayon --</option></select>
+            </div>
+            <div class="flex gap-1 mb-2 items-stretch" style="height: 38px;">
+                <button onclick="resetDateFilter()" class="flex-none flex items-center justify-center border-2 border-black bg-white text-red-600 font-black px-1">✕</button>
+                <input type="date" id="filter-date" onchange="loadGroupData(document.getElementById('sel-group').value)" class="border-2 border-black font-black text-[9px] uppercase bg-yellow-50 outline-none" style="width: 33%;">
+                <select id="sel-pos" onchange="updateFilterDateFromPostit(); refreshView();" class="flex-1 border-2 border-black font-bold text-[10px] uppercase bg-white outline-none"><option value="">-- Post-it --</option></select>
+            </div>
+            <div class="relative px-1">
+                <div id="eink-sim" onclick="goToPage(4)" class="cursor-pointer border-4 border-black bg-white p-2 h-[100px] overflow-hidden font-mono text-[10px]"></div>
+                <button onclick="goToPage(4)" class="absolute top-2 right-3 bg-blue-50 text-blue-600 p-2 border-2 border-blue-200 shadow-[2px_2px_0px_#bfdbfe] flex items-center justify-center z-10">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </button>
+            </div>
+            <div id="chat-history"></div>
+        </div>
+
+        <div class="page px-5 pt-24" id="p2">
+            <select id="arch-group" onchange="loadArchDevices(this.value)" class="w-full p-3 border-2 border-black font-black text-xs uppercase bg-white shadow-[2px_2px_0px_#000]"></select>
+            <div class="flex gap-2 mt-2">
+                <select id="arch-dev" onchange="loadArchPostits(this.value)" class="flex-1 p-3 border-2 border-black font-black text-xs uppercase bg-white shadow-[2px_2px_0px_#000]"><option value="">-- Display --</option></select>
+                <select id="arch-pos" onchange="refreshArchiveView()" class="flex-1 p-3 border-2 border-black font-black text-xs uppercase bg-white shadow-[2px_2px_0px_#000]"><option value="">-- Post-it --</option></select>
+            </div>
+            <div id="archive-content" class="mt-4 overflow-y-auto bg-white/30 border-2 border-black/5" style="height:calc(100vh - 480px)">
+                <p class="text-center opacity-30 italic text-[10px] uppercase font-black mt-10">Sélectionnez un post-it pour voir l'historique</p>
+            </div>
+            <div class="mt-4 pb-20">
+                <button onclick="backupCurrentPostit()" class="w-full bg-black text-white p-4 font-black uppercase text-xs shadow-[4px_4px_0px_#ccc]">💾 Sauvegarder le Direct actuel</button>
+            </div>
+        </div>
+
+        <div class="page" id="p3">
+            <div class="acc-item">
+                <input type="checkbox" id="check-m" class="acc-trigger" checked>
+                <div class="acc-header">
+                    <label for="check-m" class="acc-label-text">Membres du groupe</label>
+                    <label for="check-m" class="acc-toggle-icon"></label>
+                </div>
+                <div class="acc-content"><div id="list-members"></div></div>
+            </div>
+        </div>
+
+        <div class="page bg-white" id="p4" style="padding: 10px !important;">
+            <div class="h-full flex flex-col">
+                <div id="prep-header"></div>
+                <div id="prep-content" class="flex-grow mt-2 font-mono text-3xl text-black border-4 border-black p-4 overflow-y-auto bg-white"></div>
+            </div>
+        </div>
+    </div>
+
+	<div id="message-bar" class="send-container" style="display:none; position: fixed; bottom: 65px; width: 100%; z-index: 1000;">
+		
+		<div id="upload-menu" class="hidden" style="position:absolute; bottom:60px; left:10px; background:white; border:2px solid black; z-index:100; padding:5px;">
+			<button onclick="triggerUpload('camera')" style="display:block; width:100%; padding:10px; font-weight:900; font-size:10px; text-transform:uppercase; border-bottom:1px solid #eee; text-align:left;">📸 Ticket de caisse</button>
+			<button onclick="triggerUpload('file')" style="display:block; width:100%; padding:10px; font-weight:900; font-size:10px; text-transform:uppercase; text-align:left;">📂 Ajouter un document</button>
+		</div>
+
+		<button onclick="toggleUploadMenu()" class="btn-send" style="display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+			<span style="font-size: 18px; line-height: 1;">📎</span>
+		</button>
+		
+		<textarea id="msg-input" placeholder="Écrire un message..." style="flex:1; margin: 0 5px;"></textarea>
+		
+		<button onclick="send()" class="btn-send" style="display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+			<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+				<line x1="22" y1="2" x2="11" y2="13"></line>
+				<polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+			</svg>
+		</button>
+
+		<input type="file" id="up-camera" accept="image/*" capture="environment" class="hidden" onchange="uploadFile(this)">
+		<input type="file" id="up-file" accept="image/*" class="hidden" onchange="uploadFile(this)">
+	</div>
+	
+    <div id="order-modal" class="hidden fixed inset-0 bg-black/80 z-[3000] flex items-center justify-center p-4">
+        <div class="bg-[#efeee9] border-4 border-black p-6 w-full max-w-md shadow-[8px_8px_0px_#000]">
+            <h2 class="text-2xl font-black uppercase mb-4 italic">Nouvelle Commande</h2>
+            <div class="space-y-4">
+                <input type="text" id="order-client" placeholder="Nom du Client *" class="w-full p-2 border-2 border-black font-bold">
+                <input type="text" id="order-num" placeholder="N° de Commande (Optionnel)" class="w-full p-2 border-2 border-black font-bold">
+                <div class="flex gap-2">
+                    <input type="tel" id="order-phone" placeholder="Téléphone" class="flex-1 p-2 border-2 border-black font-bold">
+                    <input type="datetime-local" id="order-date" class="flex-1 p-2 border-2 border-black font-bold">
+                </div>
+            </div>
+            <div class="mt-6 flex gap-2">
+                <button onclick="closeOrderModal()" class="flex-1 p-3 border-2 border-black font-black uppercase text-xs bg-white">Annuler</button>
+                <button onclick="submitOrder()" class="flex-1 p-3 bg-black text-white font-black uppercase text-xs shadow-[4px_4px_0px_#ccc]">Créer la liste</button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="tab-bar">
+        <div class="tab-item" onclick="goToPage(0)"><span>⚙️</span><span>Params</span></div>
+        <div class="tab-item active" onclick="goToPage(1)"><span>💬</span><span>Direct</span></div>
+        <div class="tab-item" onclick="goToPage(2)"><span>📚</span><span>Archives</span></div>
+        <div class="tab-item" onclick="goToPage(3)"><span>👥</span><span>Membres</span></div>
+        <div class="tab-item" onclick="goToPage(4)"><span>👨‍🍳</span><span>Prep</span></div>
+    </nav>
+
+    <script src="js/auth.js"></script>
+    <script src="js/navigation.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/archives.js"></script>
+</body>
+</html>

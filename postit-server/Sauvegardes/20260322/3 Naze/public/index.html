@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>e-Postit Pro</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div id="auth-screen">
+        <h1 class="text-4xl font-black mb-10 italic text-center tracking-tighter">e-POSTIT</h1>
+        <input type="text" id="auth-name" placeholder="Nom complet" class="hidden">
+        <input type="email" id="auth-email" placeholder="Email">
+        <input type="password" id="auth-pass" placeholder="Mot de passe">
+        <button onclick="handleAuth()" id="auth-btn" class="btn-black h-14 mt-4 text-lg">Connexion</button>
+        <p class="text-center mt-6 text-[10px] uppercase font-black cursor-pointer opacity-50" 
+           onclick="toggleAuthMode()" id="auth-toggle">
+            Pas de compte ? Créer un compte
+        </p>
+    </div>
+
+    <header class="fixed-header">
+        <div class="flex-col">
+            <h1 class="text-xl font-black italic tracking-tighter leading-none">e-POSTIT PRO</h1>
+            <div id="status-badge" class="mt-1">
+                <div id="badge-group">GROUPE: --</div>
+                <div id="badge-dev">RAYON: --</div>
+            </div>
+        </div>
+        <button onclick="localStorage.removeItem('user'); location.reload();" class="text-[10px] font-black uppercase border-2 border-black px-2 py-1 bg-white">Sortir</button>
+    </header>
+
+    <div id="viewport">
+        
+        <div class="page px-4 pt-24" id="p0">
+            <h2 class="text-xs font-black uppercase mb-4 border-b-2 border-black pb-1">Gestion Structure</h2>
+            <div class="space-y-4">
+                <div class="flex gap-2">
+                    <button onclick="uiCreateGroup(event)" class="flex-1 btn-plus-3d bg-white p-3 border-2 border-black text-[10px] font-black uppercase">+ Groupe</button>
+                    <button onclick="uiCreateDevice(event)" class="flex-1 btn-plus-3d bg-white p-3 border-2 border-black text-[10px] font-black uppercase">+ Rayon</button>
+                </div>
+                <button onclick="uiCreatePostit(event)" class="w-full btn-plus-3d bg-black text-white p-4 border-2 border-black text-xs font-black uppercase">+ Nouvelle Liste Client</button>
+            </div>
+            
+            <div class="mt-8">
+                <h3 class="text-[10px] font-black uppercase mb-2 opacity-50">Éléments enregistrés</h3>
+                <div id="admin-list" class="space-y-2">
+                    </div>
+            </div>
+        </div>
+
+        <div class="page px-4 pt-24 page-direct" id="p1">
+            
+            <div class="flex gap-1 mb-1 items-stretch" style="height: 32px;">
+                <select id="sel-group" onchange="loadGroupData(this.value)" 
+                        style="height: 32px; padding: 0 4px 0 8px; -webkit-appearance: none; appearance: none;"
+                        class="flex-1 border-2 border-black font-bold text-[10px] uppercase bg-white outline-none">
+                </select>
+                <select id="sel-dev" onchange="loadGroupData(document.getElementById('sel-group').value)" 
+                        style="height: 32px; padding: 0 4px 0 8px; -webkit-appearance: none; appearance: none;"
+                        class="flex-1 border-2 border-black font-bold text-[10px] uppercase bg-white outline-none">
+                    <option value="">-- Rayon --</option>
+                </select>
+            </div>
+
+            <div class="flex gap-1 mb-2 items-stretch" style="height: 32px;">
+                <button onclick="resetDateFilter()" 
+                        style="height: 32px; width: 32px; padding: 0;"
+                        class="flex-none flex items-center justify-center border-2 border-black bg-white text-red-600 font-black">
+                    ✕
+                </button>
+                
+                <div class="w-[32%]" style="height: 32px;">
+                    <input type="date" id="filter-date" 
+                           onchange="loadGroupData(document.getElementById('sel-group').value)" 
+                           style="height: 32px; width: 100%; padding: 0 4px; -webkit-appearance: none; appearance: none; display: flex; align-items: center;"
+                           class="border-2 border-black font-black text-[10px] uppercase bg-yellow-50 outline-none">
+                </div>
+
+                <select id="sel-pos" onchange="updateFilterDateFromPostit(); refreshView();" 
+                        style="height: 32px; padding: 0 4px 0 8px; -webkit-appearance: none; appearance: none;"
+                        class="flex-1 border-2 border-black font-bold text-[10px] uppercase bg-white outline-none">
+                    <option value="">-- Client --</option>
+                </select>
+            </div>
+
+            <div id="eink-sim" class="border-2 border-black p-2 bg-white font-mono text-[11px] leading-tight mb-2 overflow-y-auto" style="height: 80px;">
+                </div>
+
+            <div id="chat-history" class="flex-1 overflow-y-auto space-y-3 mb-2 p-1" style="max-height: calc(100vh - 380px);">
+                </div>
+
+            <div class="flex gap-1 bg-white border-2 border-black p-1 mb-20">
+                <input type="text" id="msg-input" placeholder="Taper un message..." 
+                       class="flex-1 p-2 text-xs font-bold outline-none uppercase"
+                       onkeypress="if(event.key==='Enter') send()">
+                <button onclick="send()" class="bg-black text-white px-4 font-black uppercase text-xs">OK</button>
+            </div>
+        </div>
+
+        <div class="page px-4 pt-24" id="p2">
+            <div class="space-y-1 mb-4">
+                <select id="arch-group" onchange="loadArchDevices(this.value)" class="w-full border-2 border-black p-2 text-[10px] font-black uppercase bg-white"></select>
+                <div class="flex gap-1">
+                    <select id="arch-dev" onchange="loadArchPostits(this.value)" class="flex-1 border-2 border-black p-2 text-[10px] font-black uppercase bg-white">
+                        <option value="">-- Display --</option>
+                    </select>
+                    <select id="arch-pos" onchange="refreshArchiveView()" class="flex-1 border-2 border-black p-2 text-[10px] font-black uppercase bg-white">
+                        <option value="">-- Post-it --</option>
+                    </select>
+                </div>
+            </div>
+            <div id="archive-content" class="overflow-y-auto pb-24" style="height: calc(100vh - 250px);">
+                </div>
+        </div>
+
+        <div class="page px-4 pt-24" id="p3">
+            <div class="bg-white border-2 border-black p-4 mb-4">
+                <h2 class="text-xs font-black uppercase mb-4">Ajouter un Membre</h2>
+                <input type="email" id="member-email" placeholder="Email du membre" class="w-full border-2 border-black p-2 mb-2 text-xs font-bold">
+                <select id="member-role" class="w-full border-2 border-black p-2 mb-4 text-xs font-bold uppercase">
+                    <option value="member">Membre (Lecture)</option>
+                    <option value="admin">Admin (Total)</option>
+                </select>
+                <button onclick="addMember()" class="w-full bg-black text-white p-3 font-black uppercase text-xs">Inviter dans le groupe</button>
+            </div>
+            <div id="members-list" class="space-y-2">
+                </div>
+        </div>
+
+    </div>
+
+    <div id="order-modal" class="fixed inset-0 bg-black/80 z-[3000] hidden flex items-center justify-center p-4">
+        <div class="bg-white border-4 border-black w-full max-w-sm p-6">
+            <h2 id="modal-title" class="text-xl font-black uppercase italic mb-6 border-b-4 border-black pb-2">Nouvelle Liste</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-[10px] font-black uppercase">Nom du Client *</label>
+                    <input type="text" id="order-client" class="w-full p-2 border-2 border-black font-bold uppercase">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-[10px] font-black uppercase">N° Commande</label>
+                        <input type="text" id="order-num" class="w-full p-2 border-2 border-black font-bold">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-black uppercase">Téléphone</label>
+                        <input type="tel" id="order-phone" class="w-full p-2 border-2 border-black font-bold">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-[10px] font-black uppercase">Date & Heure de Retrait *</label>
+                    <input type="datetime-local" id="order-date" class="w-full p-2 border-2 border-black font-bold">
+                </div>
+            </div>
+            <div class="mt-8 flex gap-2">
+                <button onclick="closeOrderModal()" class="flex-1 p-3 border-2 border-black font-black uppercase text-xs bg-white">Annuler</button>
+                <button onclick="submitOrder()" class="flex-1 p-3 bg-black text-white font-black uppercase text-xs">Valider</button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="tab-bar">
+        <div class="tab-item" onclick="goToPage(0)"><span>⚙️</span><span>Params</span></div>
+        <div class="tab-item active" onclick="goToPage(1)"><span>💬</span><span>Direct</span></div>
+        <div class="tab-item" onclick="goToPage(2)"><span>📚</span><span>Archives</span></div>
+        <div class="tab-item" onclick="goToPage(3)"><span>👥</span><span>Membres</span></div>
+    </nav>
+
+    <script src="js/auth.js"></script>
+    <script src="js/navigation.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/archives.js"></script>
+</body>
+</html>

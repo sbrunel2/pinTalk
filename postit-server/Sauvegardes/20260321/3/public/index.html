@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>e-Postit Pro</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div id="auth-screen">
+        <h1 class="text-4xl font-black mb-10 italic text-center tracking-tighter">e-POSTIT</h1>
+        <input type="email" id="auth-email" placeholder="Email">
+        <input type="password" id="auth-pass" placeholder="Mot de passe">
+        <button onclick="login()" class="btn-black h-14 mt-4 text-lg">Connexion</button>
+    </div>
+
+    <div class="fixed-header">
+        <h2 id="page-title" class="font-black italic uppercase text-xl">Direct</h2>
+        <div id="status-badge">
+            <div>GRP: <span id="st-grp">-</span></div>
+            <div>DEV: <span id="st-dev">-</span></div>
+            <div>POS: <span id="st-pos">-</span></div>
+        </div>
+    </div>
+
+    <div id="viewport">
+        <div class="page" id="p0">
+            <div class="acc-item">
+                <input type="checkbox" id="check-g" class="acc-trigger" checked>
+                <label for="check-g" class="acc-label">1. Groupes</label>
+                <div class="acc-content">
+                    <div id="list-groups-del"></div>
+                    <div class="flex gap-1">
+                        <input type="text" id="new-group-name" placeholder="Nom">
+                        <button onclick="createGroup()" class="btn-black w-24">CRÉER</button>
+                    </div>
+                </div>
+            </div>
+            <div class="acc-item">
+                <input type="checkbox" id="check-d" class="acc-trigger">
+                <label for="check-d" class="acc-label">2. Displays</label>
+                <div class="acc-content">
+                    <div id="list-devs-del"></div>
+                    <div class="flex gap-1">
+                        <input type="text" id="new-dev-name" placeholder="Nom">
+                        <button onclick="addDevice()" class="btn-black w-24">CRÉER</button>
+                    </div>
+                </div>
+            </div>
+            <div class="acc-item">
+                <input type="checkbox" id="check-p" class="acc-trigger">
+                <label for="check-p" class="acc-label">3. Post-it</label>
+                <div class="acc-content">
+                    <div id="list-postits-del"></div>
+                    <div class="flex gap-1">
+                        <input type="text" id="new-postit-name" placeholder="Nom">
+                        <button onclick="addPostit()" class="btn-black w-24">CRÉER</button>
+                    </div>
+                </div>
+            </div>
+            <button onclick="logout()" class="mt-10 opacity-30 text-[9px] uppercase font-black underline">Déconnexion</button>
+        </div>
+
+        <div class="page" id="p1">
+            <select id="sel-group" onchange="syncSelection('group', this.value)"></select>
+            <div class="flex gap-2">
+                <select id="sel-dev" onchange="syncSelection('dev', this.value)"></select>
+                <select id="sel-pos" onchange="refreshView()"></select>
+            </div>
+            <div id="eink-sim"></div>
+            <div id="chat-history"></div>
+            <div class="send-container">
+                <textarea id="msg-input" placeholder="Message..."></textarea>
+                <button onclick="send()" class="btn-send">➤</button>
+            </div>
+        </div>
+
+        <div class="page" id="p2">
+            <h2 class="mt-20 opacity-20 text-center font-black italic text-4xl uppercase">Archives</h2>
+        </div>
+
+        <div class="page" id="p3">
+            <div class="acc-item">
+                <input type="checkbox" id="check-m" class="acc-trigger" checked>
+                <label for="check-m" class="acc-label">Membres du groupe</label>
+                <div class="acc-content">
+                    <div id="list-members"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <nav class="tab-bar">
+        <div class="tab-item" onclick="goToPage(0)"><span>⚙️</span><span>Params</span></div>
+        <div class="tab-item active" onclick="goToPage(1)"><span>💬</span><span>Direct</span></div>
+        <div class="tab-item" onclick="goToPage(2)"><span>📚</span><span>Archives</span></div>
+        <div class="tab-item" onclick="goToPage(3)"><span>👥</span><span>Membres</span></div>
+    </nav>
+
+    <script src="js/auth.js"></script>
+    <script src="js/navigation.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
