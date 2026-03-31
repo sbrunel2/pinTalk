@@ -171,8 +171,11 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// On applique ce middleware à TOUTES les routes qui commencent par /api
-app.use('/api', authenticateToken);
+// On applique le middleware JWT à toutes les routes /api SAUF login et register
+app.use('/api', (req, res, next) => {
+    if (req.path === '/login' || req.path === '/register') return next();
+    return authenticateToken(req, res, next);
+});
 
 app.get('/api/fix-groups', async (req, res) => {
     const email = req.query.email;

@@ -18,11 +18,11 @@ async function fetchAuth(url, options = {}) {
 }
 
 async function initApp() {
-	const socket = io({
-		auth: {
-			token: localStorage.getItem('token') 
-		}
-	});
+    socket = io({
+        auth: {
+            token: localStorage.getItem('token') 
+        }
+    });
     
     socket.on('new-message', m => { 
         allMsgs.unshift(m); 
@@ -465,7 +465,7 @@ async function loadGroupData(groupId) {
                     })
                 });
                 // Recharge après création
-				const resPost2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
+                const resPos2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
                 postits = await resPos2.json();
             }
 
@@ -547,51 +547,6 @@ async function updateFilterDateFromPostit() {
     }
 }
 
-
-async function changeStatusManually(pid) {
-    // 1. On définit les options
-    const states = ["En attente", "En préparation", "Terminé", "Annulé"];
-    
-    // 2. On crée dynamiquement un petit menu ou on utilise une astuce plus simple :
-    // Pour rester efficace sans refaire tout un design UI, on utilise une liste de choix numérotée 
-    // MAIS on ajoute la logique de commentaire pour l'annulation.
-    
-    const choice = prompt(
-        "SÉLECTIONNER LE STATUT :\n1. En attente\n2. En préparation\n3. Terminé\n4. ANNULÉ (avec motif)"
-    );
-
-    if (choice >= 1 && choice <= 4) {
-        let newStatus = states[choice - 1];
-        let cancelReason = "";
-
-        // Si choix "Annulé", on demande pourquoi
-        if (newStatus === "Annulé") {
-            cancelReason = prompt("Motif de l'annulation (optionnel) :");
-            if (cancelReason === null) return; // L'utilisateur a cliqué sur annuler la saisie
-        }
-
-        // Envoi au serveur
-        socket.emit('update-postit-status', { 
-            postitId: pid, 
-            status: newStatus,
-            comment: cancelReason // On envoie le commentaire au serveur
-        });
-    }
-}
-
-// --- AJOUT : Fonction pour basculer l'icône (Style uniquement) ---
-function toggleNote(btn, messageId) {
-    // On change l'icône entre l'oeil et le sens interdit
-    if (btn.innerText === '👁️') {
-        btn.innerText = '🚫';
-        // On peut aussi ajouter une opacité sur la bulle parente pour le style
-        btn.closest('.msg-row').style.opacity = "0.3";
-    } else {
-        btn.innerText = '👁️';
-        btn.closest('.msg-row').style.opacity = "1";
-    }
-    // Note : On ne fait pas d'émission socket ici comme demandé, juste du style.
-}
 
 function toggleNote(messageId) {
     socket.emit('toggle-message-note', { messageId });
@@ -972,7 +927,12 @@ async function uploadFile(input) {
     const pid = document.getElementById('sel-pos').value; // On récupère l'ID du post-it actuel
 
     try {
-        const res = await fetchAuth('/api/upload', { method: 'POST', body: formData });
+        const token = localStorage.getItem('token');
+        const res = await fetch('/api/upload', { 
+            method: 'POST', 
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData 
+        });
         const data = await res.json();
 
         // 1. Envoi du message avec l'image
@@ -1076,7 +1036,7 @@ async function deleteDevice(id) {
             const currentGid = selGroup ? selGroup.value : null;
 
             // Si on a supprimé le rayon actif, on vide le header
-            document.getElementById('current-device-name').innerText = "AUCUN RAYON";
+            updateVisualHeader();
             
             // Rafraîchissement des données
             if (currentGid) {

@@ -39,6 +39,7 @@ async function handleAuth() {
         if (res.ok) {
             const data = await res.json();
             localStorage.setItem('user', JSON.stringify(data.user));
+            if (data.token) localStorage.setItem('token', data.token);
             window.location.href = "/"; 
         } else {
             const errData = await res.json();
