@@ -1,5 +1,7 @@
 require('dotenv').config(); // Charge les variables du fichier .env
 const express = require('express');
+const jwt = require('jsonwebtoken'); // À ajouter en haut
+
 const mongoose = require('mongoose');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -93,7 +95,6 @@ function generateJoinCode() {
 }
 
 // --- ROUTES API ---
-const jwt = require('jsonwebtoken'); // À ajouter en haut
 
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
