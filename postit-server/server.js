@@ -188,10 +188,6 @@ app.get('/api/groups', async (req, res) => {
     // On récupère l'email passé dans l'URL (ex: /api/groups?email=test@test.com)
     const userEmail = req.query.email;
 
-    if (!userEmail) {
-        return res.status(400).send("Email utilisateur requis pour filtrer les données.");
-    }
-
     try {
         // ON FILTRE : On ne cherche que les groupes dont l'ownerEmail correspond
         const groups = await Group.find({ ownerEmail: userEmail });
@@ -207,30 +203,31 @@ app.get('/api/groups', async (req, res) => {
 
 app.post('/api/groups', async (req, res) => {
     try {
-        const { name, ownerEmail } = req.body;
+        // 1. On ne récupère que le 'name' depuis le body. 
+        // 🗑️ On retire 'ownerEmail' de la déstructuration.
+        const { name } = req.body;
+        
+        // 2. 🔑 On récupère l'email SECURISE depuis le token (grâce au middleware)
+        const userEmail = req.user.email; 
         
         if (!name) return res.status(400).send("Le nom du groupe est obligatoire");
 
-        // Création du groupe avec le code unique pour les clients
+        // 3. Création du groupe avec l'email du Token
         const g = new Group({ 
             name: name,
-            ownerEmail: ownerEmail,
+            ownerEmail: userEmail, // <--- C'est l'email du badge !
             joinCode: generateJoinCode() 
         });
 
         const savedGroup = await g.save();
         
-        // LOGIQUE V3 : On n'utilise plus g.members. 
-        // Le créateur est reconnu par son "ownerEmail" dans toutes les routes.
-        
-        console.log(`[V3] Groupe créé : ${savedGroup.name} (Code: ${savedGroup.joinCode}) par ${ownerEmail}`);
+        console.log(`[V3] Groupe créé : ${savedGroup.name} (Code: ${savedGroup.joinCode}) par ${userEmail}`);
         res.json(savedGroup);
     } catch (err) {
         console.error("Erreur création groupe:", err);
         res.status(500).send("Erreur lors de la création du groupe");
     }
 });
-
 
 // --- ROUTES DEVICES ---
 
@@ -242,25 +239,28 @@ app.get('/api/devices/:gid', async (req, res) => {
 // 2. Pour les ARCHIVES : sans ID dans l'URL, utilise le query ?groupName=...
 app.get('/api/devices', async (req, res) => {
     try {
-        const { email, groupId } = req.query; 
-        const query = {};
+        // 1. On récupère le groupId depuis l'URL (si présent)
+        // 🗑️ On retire 'email' car on va utiliser req.user.email
+        const { groupId } = req.query; 
+        const userEmail = req.user.email; // 🔑 Extrait du Token
         
-        // Si on a un groupId, c'est la priorité (utilisé par le chat et les params)
+        const query = {};
+
+        // 2. Si un groupId est précisé, on filtre par groupe
         if (groupId) {
             query.groupId = groupId;
         }
 
-        // Sécurité V3 : Si on a un email, on s'assure que l'utilisateur possède bien ces rayons
-        // On utilise $or pour être plus souple pendant la transition
-        if (email) {
-            query.$or = [
-                { ownerEmail: email },
-                { ownerEmail: { $exists: false } } // Permet de voir les anciens rayons non "tatoués"
-            ];
-        }
-        
+        // 3. SÉCURITÉ : On ne montre que les rayons appartenant à cet utilisateur
+        // On garde ton $or pour la transition (pour voir les anciens rayons sans propriétaire)
+        query.$or = [
+            { ownerEmail: userEmail },
+            { ownerEmail: { $exists: false } } 
+        ];
+
         const devices = await Device.find(query);
-        console.log(`[GET] ${devices.length} rayons trouvés (Groupe: ${groupId || 'Tous'}, Email: ${email || 'Non fourni'})`);
+        
+        console.log(`[GET] ${devices.length} rayons trouvés pour ${userEmail} (Groupe: ${groupId || 'Tous'})`);
         
         res.json(devices);
     } catch (err) {
@@ -278,75 +278,87 @@ app.get('/api/postits/:did', async (req, res) => {
 // 2. Pour les ARCHIVES : sans ID dans l'URL, utilise le query ?deviceName=...
 app.get('/api/postits', async (req, res) => {
     try {
-        const { deviceId, email, filterDate } = req.query;
+        // 1. On récupère le deviceId et le filtre de date. 
+        // 🗑️ L'email "email" est supprimé de req.query.
+        const { deviceId, filterDate } = req.query;
+        const userEmail = req.user.email; // 🔑 Identité certifiée par le Token
 
-        if (!deviceId || !email) {
-            return res.status(400).send("DeviceId et Email requis");
+        if (!deviceId) {
+            return res.status(400).send("DeviceId requis");
         }
 
-        // 1. Initialisation de la requête avec tes filtres existants
+        // 2. Initialisation de la requête de base
         let query = { 
             deviceId: deviceId,
-            status: { $ne: 'Récupéré' } // On garde ton filtre d'exclusion
+            status: { $ne: 'Récupéré' } 
         };
 
-        // 2. Ajout du filtre de date si présent (ton regex)
         if (filterDate && filterDate !== "") {
             query.pickupDate = { $regex: '^' + filterDate };
         }
 
-        // 3. LOGIQUE DE SÉCURITÉ V3 (L'intelligence de filtrage)
+        // 3. LOGIQUE DE SÉCURITÉ (Qui a le droit de voir quoi ?)
         const device = await Device.findById(deviceId);
         if (!device) return res.json([]);
         
         const group = await Group.findById(device.groupId);
         if (!group) return res.json([]);
 
-        // Si ce n'est PAS la patronne (Véro)
-        if (group.ownerEmail !== email) {
-            // On vérifie si c'est un employé (Thierry)
+        // SCÉNARIO A : Si ce n'est PAS le propriétaire du commerce (Véro)
+        if (group.ownerEmail !== userEmail) {
+            
+            // On vérifie le SCÉNARIO B : Est-ce un employé (Thierry) ?
             const perm = await Permission.findOne({ 
                 groupId: group._id, 
-                guestEmail: email, 
+                guestEmail: userEmail, 
                 role: 'employe' 
             });
             
             if (!perm) {
-                // Ce n'est ni la patronne, ni un employé -> C'est Mme Michu
-                // Elle ne voit que ses propres post-its
-                query.ownerEmail = email;
+                // SCÉNARIO C : Ce n'est ni le patron, ni un employé -> C'est un client (Mme Michu)
+                // Elle ne voit QUE ses propres post-its (filtrage strict par son email du Token)
+                query.ownerEmail = userEmail;
             }
         }
+        // Note : Si c'est le patron ou l'employé, 'query.ownerEmail' n'est pas ajouté,
+        // donc ils voient TOUS les post-its du rayon.
 
         // 4. Exécution avec ton tri par date
         const postits = await Postit.find(query).sort({ pickupDate: 1 });
+        
+        console.log(`[GET Postits] ${postits.length} trouvés pour ${userEmail} sur le rayon ${deviceId}`);
         res.json(postits);
 
     } catch (err) {
         console.error("Erreur GET Postits:", err);
-        res.status(500).json(err);
+        res.status(500).json({ message: "Erreur serveur lors de la récupération des post-its" });
     }
 });
 
 app.post('/api/devices', async (req, res) => {
     try {
-        const { name, groupId, ownerEmail } = req.body; // On récupère l'email envoyé par le front
+        // 1. On ne récupère que le nom et le groupId du body.
+        // 🗑️ On dégage 'ownerEmail' : on ne fait plus confiance au front-end pour ça.
+        const { name, groupId } = req.body; 
+        const userEmail = req.user.email; // 🔑 Identité certifiée par le Token
 
-        if (!name || !groupId || !ownerEmail) {
-            return res.status(400).send("Nom, ID de groupe et Email obligatoires");
+        if (!name || !groupId) {
+            return res.status(400).send("Nom et ID de groupe obligatoires");
         }
 
-        // On crée le rayon en incluant l'ownerEmail
+        // 2. On crée le rayon (Device) en "tatouant" l'email du Token dessus
         const device = new Device({
             name,
             groupId,
-            ownerEmail,
+            ownerEmail: userEmail, // <--- C'est ici que la sécurité se joue
             mac: req.body.mac || "00"
         });
 
         const savedDevice = await device.save();
-        console.log(`[POST] Rayon créé : ${savedDevice.name} (Propriétaire: ${ownerEmail})`);
+        
+        console.log(`[POST] Rayon créé : ${savedDevice.name} (Propriétaire certifié : ${userEmail})`);
         res.json(savedDevice);
+
     } catch (err) {
         console.error("Erreur création rayon :", err);
         res.status(500).send("Erreur serveur lors de la création du rayon");
@@ -355,44 +367,53 @@ app.post('/api/devices', async (req, res) => {
 
 app.post('/api/postits', async (req, res) => {
     try {
-        const { deviceId, name, orderNumber, phone, pickupDate, ownerEmail } = req.body;
+        // 1. On récupère les infos de la commande depuis le body.
+        // 🗑️ On supprime 'ownerEmail' de la liste : on utilise req.user.email à la place.
+        const { deviceId, name, orderNumber, phone, pickupDate } = req.body;
+        const userEmail = req.user.email; // 🔑 Identité certifiée par le Token
 
-        // Sécurité : on vérifie que les infos minimales sont là
-        if (!deviceId || !name || !ownerEmail) {
-            return res.status(400).send("Données manquantes (Rayon, Nom ou Email)");
+        // 2. Vérification des infos minimales (sans l'email du body donc)
+        if (!deviceId || !name) {
+            return res.status(400).send("Données manquantes (Rayon ou Nom du client)");
         }
 
+        // 3. Création du Post-it "tatoué" avec l'email du Token
         const postit = new Postit({
             deviceId,
             name,
             orderNumber,
             phone,
             pickupDate,
-            ownerEmail, // <--- Lié à l'utilisateur V3
+            ownerEmail: userEmail, // <--- Sécurité garantie
             status: 'En attente'
         });
 
         const saved = await postit.save();
-        console.log(`[POST] Post-it créé pour client: ${name} (Propriétaire: ${ownerEmail})`);
+        
+        console.log(`[POST] Post-it créé pour : ${name} (Propriétaire certifié : ${userEmail})`);
         res.json(saved);
+
     } catch (err) {
         console.error("Erreur création postit:", err);
-        res.status(500).send("Erreur serveur");
+        res.status(500).send("Erreur serveur lors de la création de la commande");
     }
 });
 
 app.get('/api/fix-postits', async (req, res) => {
-    const email = req.query.email;
-    if (!email) return res.status(400).send("Email requis.");
+    // 🔑 On récupère l'email depuis le Token, pas depuis l'URL.
+    const userEmail = req.user.email; 
 
     try {
-        // On donne tous les post-its sans propriétaire à cet email
+        // On donne tous les post-its sans propriétaire à l'utilisateur connecté
         const result = await Postit.updateMany(
             { ownerEmail: { $exists: false } }, 
-            { $set: { ownerEmail: email } }
+            { $set: { ownerEmail: userEmail } }
         );
-        res.send(`${result.modifiedCount} commandes (post-its) ont été rattachées à ${email}`);
+        
+        console.log(`[FIX] ${result.modifiedCount} post-its rattachés à ${userEmail}`);
+        res.send(`${result.modifiedCount} commandes (post-its) ont été rattachées à votre compte (${userEmail})`);
     } catch (err) {
+        console.error("Erreur fix-postits:", err);
         res.status(500).send(err.message);
     }
 });
@@ -402,13 +423,25 @@ app.get('/api/fix-postits', async (req, res) => {
 // 1. Créer une sauvegarde (Backup)
 app.post('/api/archives/backup', async (req, res) => {
     try {
-        console.log("📦 Réception d'une archive pour :", req.body.postitName);
-        const newArch = new Archive(req.body);
+        // 🔑 On récupère l'email certifié du Token
+        const userEmail = req.user.email; 
+        
+        console.log("📦 Réception d'une archive pour :", req.body.postitName, `(User: ${userEmail})`);
+
+        // 🛡️ Sécurité : on prend tout le body MAIS on écrase l'ownerEmail 
+        // par celui du Token pour être sûr de l'appartenance.
+        const archiveData = {
+            ...req.body,
+            ownerEmail: userEmail
+        };
+
+        const newArch = new Archive(archiveData);
         await newArch.save();
+        
         res.status(201).json(newArch);
     } catch (err) {
         console.error("❌ Erreur sauvegarde archive:", err);
-        res.status(500).send(err.message);
+        res.status(500).send("Erreur lors de l'archivage de la commande");
     }
 });
 
@@ -419,41 +452,44 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
 app.post('/api/groups/join', async (req, res) => {
     try {
-        const { email, joinCode } = req.body;
+        // 1. On récupère le code de join du body.
+        // 🗑️ On retire 'email' : on utilise l'identité certifiée du Token.
+        const { joinCode } = req.body;
+        const userEmail = req.user.email; // 🔑 Identité certifiée
 
-        if (!email || !joinCode) {
-            return res.status(400).send("Email et Code requis.");
+        if (!joinCode) {
+            return res.status(400).send("Le code de ralliement est requis.");
         }
 
-        // 1. On cherche le groupe qui possède ce code (insensible à la casse)
+        // 2. On cherche le groupe qui possède ce code (insensible à la casse)
         const group = await Group.findOne({ joinCode: joinCode.toUpperCase() });
         
         if (!group) {
             return res.status(404).send("Code invalide. Ce commerce n'existe pas.");
         }
 
-        // 2. Sécurité : On vérifie si Mme Michu n'est pas déjà cliente
+        // 3. Sécurité : On vérifie si l'utilisateur n'est pas déjà membre/client
         const existingPerm = await Permission.findOne({ 
             groupId: group._id, 
-            guestEmail: email 
+            guestEmail: userEmail 
         });
 
         if (existingPerm) {
-            // Si elle est déjà membre, on ne crée rien, on confirme juste
             return res.json({ message: "Vous faites déjà partie de ce groupe.", group });
         }
 
-        // 3. On crée la permission automatique en tant que CLIENT
+        // 4. On crée la permission automatique en tant que CLIENT
         const newPermission = new Permission({
             groupId: group._id,
-            guestEmail: email,
-            role: 'client' // <--- Toujours client par défaut via un code
+            guestEmail: userEmail, // <--- Lié au Token
+            role: 'client' 
         });
 
         await newPermission.save();
 
-        console.log(`[JOIN] ${email} a rejoint ${group.name} via le code ${joinCode}`);
+        console.log(`[JOIN] ${userEmail} a rejoint ${group.name} via le code ${joinCode}`);
         res.json(group);
+        
     } catch (err) {
         console.error("Erreur lors de l'adhésion au groupe :", err);
         res.status(500).send("Erreur serveur lors de l'adhésion.");
@@ -479,17 +515,29 @@ app.get('/api/archives', async (req, res) => {
 
 app.get('/api/groups/:id/members', async (req, res) => {
     try {
-        // 1. On va chercher dans la table Permission tous ceux qui sont liés à ce groupe
-        const perms = await Permission.find({ groupId: req.params.id });
+        const groupId = req.params.id;
+        const userEmail = req.user.email; // 🔑 Identité du demandeur
+
+        // 1. VÉRIFICATION DE SÉCURITÉ : Est-ce que le demandeur est le patron ?
+        const group = await Group.findById(groupId);
+        if (!group) return res.status(404).send("Groupe introuvable.");
+
+        if (group.ownerEmail !== userEmail) {
+            return res.status(403).send("Accès refusé : Seul le propriétaire peut voir la liste des membres.");
+        }
+
+        // 2. Si c'est bien le patron, on va chercher les permissions (employés + clients)
+        const perms = await Permission.find({ groupId: groupId });
         
-        // 2. On transforme le résultat pour qu'il ressemble exactement 
-        // à ce que ton app.js attend (un tableau d'objets avec email et role)
+        // 3. On transforme pour le front-end
         const members = perms.map(p => ({
             email: p.guestEmail,
             role: p.role
         }));
 
+        console.log(`[GET] Liste membres envoyée pour le groupe ${group.name} à ${userEmail}`);
         res.json(members);
+
     } catch (err) {
         console.error("Erreur récup membres:", err);
         res.status(500).send("Erreur serveur");
@@ -516,29 +564,34 @@ app.get('/api/postits/details/:id', async (req, res) => {
 // Modifier la route PUT existante pour accepter tous les champs
 app.put('/api/postits/:id', async (req, res) => {
     try {
-        const { name, orderNumber, phone, pickupDate, ownerEmail } = req.body;
+        // 1. On récupère les données à modifier du body.
+        // 🗑️ On dégage 'ownerEmail' : on utilise l'identité du Token.
+        const { name, orderNumber, phone, pickupDate } = req.body;
+        const userEmail = req.user.email; // 🔑 Identité certifiée
 
-        // On cherche le post-it ET on vérifie qu'il appartient bien à cet email
+        // 2. On cherche le post-it ET on vérifie qu'il appartient bien à cet utilisateur
+        // Cela empêche un utilisateur A de modifier un post-it appartenant à B.
         const postit = await Postit.findOneAndUpdate(
-            { _id: req.params.id, ownerEmail: ownerEmail }, 
+            { _id: req.params.id, ownerEmail: userEmail }, 
             { 
                 name, 
                 orderNumber, 
                 phone, 
                 pickupDate 
             },
-            { new: true } // Pour renvoyer le document mis à jour
+            { new: true } 
         );
 
         if (!postit) {
-            return res.status(404).send("Post-it non trouvé ou vous n'avez pas l'autorisation.");
+            // Si le post-it n'existe pas OU si l'ownerEmail ne correspond pas
+            return res.status(404).send("Post-it non trouvé ou accès refusé.");
         }
 
-        console.log(`[PUT] Post-it mis à jour : ${postit.name}`);
+        console.log(`[PUT] Post-it mis à jour par ${userEmail} : ${postit.name}`);
         res.sendStatus(200);
     } catch (err) {
         console.error("Erreur modification postit:", err);
-        res.status(500).send("Erreur serveur");
+        res.status(500).send("Erreur serveur lors de la modification.");
     }
 });
 
@@ -588,6 +641,20 @@ app.delete('/api/postits/:id', async (req, res) => {
 });
 
 // --- SOCKET.IO ---
+// Middleware de sécurité pour Socket.io
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token; // On récupère le token envoyé par le front
+    if (!token) {
+        return next(new Error("Accès refusé : Token manquant"));
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return next(new Error("Token invalide"));
+        socket.user = user; // On attache l'utilisateur au socket
+        next();
+    });
+});
+
 io.on('connection', (socket) => {
     socket.on('get-history', async (data) => {
         const msgs = await Message.find({ groupId: data.groupId }).sort({ date: -1 }).limit(50);

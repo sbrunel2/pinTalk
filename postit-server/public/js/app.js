@@ -18,7 +18,11 @@ async function fetchAuth(url, options = {}) {
 }
 
 async function initApp() {
-    socket = io();
+	const socket = io({
+		auth: {
+			token: localStorage.getItem('token') 
+		}
+	});
     
     socket.on('new-message', m => { 
         allMsgs.unshift(m); 
