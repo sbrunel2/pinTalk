@@ -7,6 +7,16 @@ if (currentUser) {
     document.addEventListener('DOMContentLoaded', () => setTimeout(initApp, 200));
 }
 
+async function fetchAuth(url, options = {}) {
+    const token = localStorage.getItem('token');
+    const headers = {
+        ...options.headers,
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+    };
+    return fetch(url, { ...options, headers });
+}
+
 async function initApp() {
     socket = io();
     
@@ -67,7 +77,7 @@ async function uiCreateGroup(e) {
 
         try {
             // ÉTAPE 1 : Créer le Groupe
-            const resG = await fetch('/api/groups', {
+            const resG = await fetchAuth('/api/groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: name.trim(), ownerEmail: user.email })
@@ -76,7 +86,7 @@ async function uiCreateGroup(e) {
 
             if (newGroup && newGroup._id) {
                 // ÉTAPE 2 : Créer le Rayon DEFAUT
-                const resD = await fetch('/api/devices', {
+                const resD = await fetchAuth('/api/devices', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -88,7 +98,7 @@ async function uiCreateGroup(e) {
                 const newDev = await resD.json();
 
                 // ÉTAPE 3 : Créer le Post-it DEFAUT
-                await fetch('/api/postits', {
+                await fetchAuth('/api/postits', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -188,7 +198,7 @@ async function uiCreateDevice(e) {
         if(!name || name.trim() === "") return;
 
         try {
-            const res = await fetch('/api/devices', { 
+            const res = await fetchAuth('/api/devices', { 
                 method: 'POST', 
                 headers: {'Content-Type':'application/json'}, 
                 body: JSON.stringify({ 
@@ -380,7 +390,7 @@ async function refreshParamsLists() {
     let currentGid = (selGroup && selGroup.value) ? selGroup.value : null;
 
     // 1. On charge les GROUPES (nécessaire pour la liste des réglages)
-    const gRes = await fetch(`/api/groups?${emailParam}`);
+    const gRes = await fetchAuth(`/api/groups?${emailParam}`);
     const groups = await gRes.json();
 
     // Si on n'a aucune sélection mais qu'on a des groupes, on prend le premier
@@ -403,7 +413,7 @@ async function refreshParamsLists() {
 
     // 3. Chargement des RAYONS (On arrive ici seulement si currentGid existe)
     try {
-        const dRes = await fetch(`/api/devices?groupId=${currentGid}&${emailParam}`);
+        const dRes = await fetchAuth(`/api/devices?groupId=${currentGid}&${emailParam}`);
         const devs = await dRes.json();
         const selDev = document.getElementById('sel-dev');
         const currentDid = selDev ? selDev.value : null;
@@ -412,7 +422,7 @@ async function refreshParamsLists() {
         // 4. Chargement des POST-ITS
         const listPos = document.getElementById('list-postits-del');
         if (currentDid && currentDid !== "") {
-            const pRes = await fetch(`/api/postits?deviceId=${currentDid}&${emailParam}`);
+            const pRes = await fetchAuth(`/api/postits?deviceId=${currentDid}&${emailParam}`);
             const ps = await pRes.json();
             const selPos = document.getElementById('sel-pos');
             const currentPid = selPos ? selPos.value : null;
@@ -679,7 +689,8 @@ async function loadGroups(idToSelect = null) {
     if (!user || !user.email) return;
 
     try {
-        const res = await fetch(`/api/groups?email=${encodeURIComponent(user.email)}`);
+//        const res = await fetch(`/api/groups?email=${encodeURIComponent(user.email)}`);
+		const res = await fetchAuth(`/api/groups`);
         const groups = await res.json();
         const sel = document.getElementById('sel-group');
 
@@ -689,12 +700,12 @@ async function loadGroups(idToSelect = null) {
             sel.value = targetId;
 
             // --- VÉRIFICATION / CRÉATION RAYON PAR DÉFAUT ---
-            const resDev = await fetch(`/api/devices?groupId=${targetId}&email=${encodeURIComponent(user.email)}`);
+            const resDev = await fetchAuth(`/api/devices?groupId=${targetId}&email=${encodeURIComponent(user.email)}`);
             let devs = await resDev.json();
 
             if (devs.length === 0) {
                 console.log("🛠️ Création du rayon DEFAUT automatique...");
-                const resNewDev = await fetch('/api/devices', {
+                const resNewDev = await fetchAuth('/api/devices', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: "DEFAUT", groupId: targetId, ownerEmail: user.email })
@@ -705,12 +716,12 @@ async function loadGroups(idToSelect = null) {
 
             // --- VÉRIFICATION / CRÉATION POST-IT PAR DÉFAUT ---
             const firstDevId = devs[0]._id;
-            const resPos = await fetch(`/api/postits?deviceId=${firstDevId}&email=${encodeURIComponent(user.email)}`);
+            const resPos = await fetchAuth(`/api/postits?deviceId=${firstDevId}&email=${encodeURIComponent(user.email)}`);
             let postits = await resPos.json();
 
             if (postits.length === 0) {
                 console.log("🛠️ Création du post-it DEFAUT automatique...");
-                await fetch('/api/postits', {
+                await fetchAuth('/api/postits', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -757,7 +768,8 @@ async function loadGroupData(groupId) {
 
     try {
         // 1. Charger les rayons
-        const resDev = await fetch(`/api/devices?groupId=${groupId}&email=${encodeURIComponent(currentUser.email)}`);
+//        const resDev = await fetch(`/api/devices?groupId=${groupId}&email=${encodeURIComponent(currentUser.email)}`);
+		const resDev = await fetchAuth(`/api/devices?groupId=${groupId}`);
         const devs = await resDev.json();
 
         if (devs && devs.length > 0) {
@@ -781,7 +793,7 @@ async function loadGroupData(groupId) {
             const filterDateEl = document.getElementById('filter-date');
             if (filterDateEl && filterDateEl.value) url += `&filterDate=${filterDateEl.value}`;
 
-            const resPos = await fetch(url);
+            const resPos = await fetchAuth(url);
             let postits = await resPos.json();
 
             if (typeof showFinished !== 'undefined') {
@@ -797,7 +809,7 @@ async function loadGroupData(groupId) {
             // --- CRÉATION POST-IT PAR DÉFAUT si aucun ---
             if (!postits || postits.length === 0) {
                 console.log("🛠️ Création post-it DEFAUT automatique pour rayon", selDev.value);
-                await fetch('/api/postits', {
+                await fetchAuth('/api/postits', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -808,7 +820,8 @@ async function loadGroupData(groupId) {
                     })
                 });
                 // Recharge après création
-                const resPos2 = await fetch(`/api/postits?deviceId=${selDev.value}&email=${encodeURIComponent(currentUser.email)}`);
+                //const resPos2 = await fetch(`/api/postits?deviceId=${selDev.value}&email=${encodeURIComponent(currentUser.email)}`);
+				const resPost2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
                 postits = await resPos2.json();
             }
 
@@ -870,7 +883,7 @@ async function updateFilterDateFromPostit() {
     }
 
     try {
-        const res = await fetch(`/api/postits/details/${pid}`);
+        const res = await fetchAuth(`/api/postits/details/${pid}`);
         // Si le serveur répond 404 ou erreur
         if (!res.ok) {
             dateInput.value = "";
@@ -1016,7 +1029,7 @@ async function refreshView(forceScrollBottom = false) {
 
     if (pid && pid !== "") {
         try {
-            const res = await fetch(`/api/postits/details/${pid}`);
+            const res = await fetchAuth(`/api/postits/details/${pid}`);
             const p = await res.json();
             if (p) {
                 currentStatus = p.status;
@@ -1249,7 +1262,7 @@ async function loadPostits(deviceId) {
     if (!deviceId) return;
 
     try {
-        const res = await fetch(`/api/postits/${deviceId}`);
+        const res = await fetchAuth(`/api/postits/${deviceId}`);
         const data = await res.json(); 
         
         // On récupère la liste (on adapte selon si ton API renvoie {postits:[]} ou [])
@@ -1315,7 +1328,7 @@ async function uploadFile(input) {
     const pid = document.getElementById('sel-pos').value; // On récupère l'ID du post-it actuel
 
     try {
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const res = await fetchAuth('/api/upload', { method: 'POST', body: formData });
         const data = await res.json();
 
         // 1. Envoi du message avec l'image
@@ -1377,7 +1390,7 @@ function send() {
 
 async function deleteGroup(id) {
     try {
-        const res = await fetch(`/api/groups/${id}`, { method: 'DELETE' });
+        const res = await fetchAuth(`/api/groups/${id}`, { method: 'DELETE' });
         if (res.ok) {
             // 1. Vider les sélecteurs
             const selGrp = document.getElementById('sel-group');
@@ -1466,7 +1479,7 @@ async function deleteGroup(id) {
 
 async function deleteDevice(id) {
     try {
-        const res = await fetch(`/api/devices/${id}`, { method: 'DELETE' });
+        const res = await fetchAuth(`/api/devices/${id}`, { method: 'DELETE' });
 
         if (res.ok) {
             const selGroup = document.getElementById('sel-group');
@@ -1496,7 +1509,7 @@ async function deletePostit(id) {
     // On garde ton confirm pour le post-it car c'est une action sensible
     if(confirm("Supprimer ce client/commande ?")) {
         try {
-            const res = await fetch(`/api/postits/${id}`, { method: 'DELETE' });
+            const res = await fetchAuth(`/api/postits/${id}`, { method: 'DELETE' });
             if (res.ok) {
                 const gid = document.getElementById('sel-group').value;
                 if (gid) {
@@ -1529,7 +1542,7 @@ async function editName(type, id, oldName) {
     if (type === 'postit') {
         // ON NE TOUCHE PAS À CETTE PARTIE (Elle gère tes fenêtres de modif clients)
         editingPostitId = id;
-        const res = await fetch(`/api/postits/details/${id}`);
+        const res = await fetchAuth(`/api/postits/details/${id}`);
         const p = await res.json();
         document.getElementById('order-client').value = p.name || "";
         document.getElementById('order-num').value = p.orderNumber || "";
@@ -1544,9 +1557,9 @@ async function editName(type, id, oldName) {
             let url = type === 'group' ? `/api/groups/${id}` : `/api/devices/${id}`;
             
             try {
-                const res = await fetch(url, {
+                const res = await fetchAuth(url, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+ //                   headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: newName.trim() })
                 });
 
@@ -1609,9 +1622,9 @@ async function submitOrder() {
     let method = editingPostitId ? 'PUT' : 'POST';
     if (!editingPostitId) payload.deviceId = devId;
 
-    const res = await fetch(url, {
+    const res = await fetchAuth(url, {
         method: method,
-        headers: {'Content-Type':'application/json'},
+        //headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
     });
 
@@ -1717,7 +1730,7 @@ async function uiJoinGroup() {
     const user = JSON.parse(localStorage.getItem('user'));
     
     try {
-        const res = await fetch('/api/groups/join', {
+        const res = await fetchAuth('/api/groups/join', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ 
@@ -1742,4 +1755,27 @@ async function uiJoinGroup() {
     }
 }
 
+async function login() {
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
 
+    const res = await fetchAuth('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+        currentUser = data.user;
+        // 🔑 ON SAUVEGARDE LE TOKEN ICI
+        localStorage.setItem('user', JSON.stringify(data.user));
+        localStorage.setItem('token', data.token); 
+        
+        document.getElementById('auth-screen').classList.add('hidden');
+        initApp();
+    } else {
+        alert("Erreur : " + (data.message || "Connexion échouée"));
+    }
+}
