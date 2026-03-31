@@ -1,3 +1,4 @@
+require('dotenv').config(); // Charge les variables du fichier .env
 const express = require('express');
 const mongoose = require('mongoose');
 const http = require('http');
@@ -17,7 +18,11 @@ app.use(express.json());
 app.use(express.static('public'));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-mongoose.connect('mongodb://localhost:27017/postit_pro_v2');
+//mongoose.connect('mongodb://localhost:27017/postit_pro_v2');
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/postit_pro_v2';
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("✅ Connecté à MongoDB"))
+  .catch(err => console.error("❌ Erreur de connexion MongoDB:", err));
 
 const User = mongoose.model('User', { 
     email: String, 
@@ -82,24 +87,44 @@ const Archive = mongoose.model('Archive', {
     adminId: String 
 });
 
-
 function generateJoinCode() {
     // Génère un code de 6 caractères (ex: 7X8Y2Z)
     return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
 // --- ROUTES API ---
+const jwt = require('jsonwebtoken'); // À ajouter en haut
+
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     let user = await User.findOne({ email });
+    
     if (user) {
-        if (user.password === password) return res.json({ user });
-        return res.status(401).send("Erreur Password");
+        // Cas : Utilisateur existant
+        if (user.password !== password) {
+            return res.status(401).send("Erreur Password");
+        }
+    } else {
+        // Cas : Nouvel utilisateur (Création auto)
+        user = new User({ 
+            email, 
+            password, 
+            name: email.split('@')[0] 
+        });
+        await user.save();
     }
-    user = new User({ email, password, name: email.split('@')[0] });
-    await user.save();
-    res.json({ user });
+
+    // ON GÉNÈRE LE TOKEN POUR TOUT LE MONDE (Existant ou Nouveau)
+    const token = jwt.sign(
+        { userId: user._id, email: user.email },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+    );
+    
+    // On renvoie toujours la même structure
+    res.json({ user, token });
 });
+
 // --- AJOUTER CE BLOC DANS TON SERVEUR ---
 
 app.post('/api/register', async (req, res) => {
@@ -131,6 +156,22 @@ app.post('/api/register', async (req, res) => {
         res.status(500).json({ message: "Erreur serveur lors de la création" });
     }
 });
+
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) return res.status(401).send("Accès refusé : Token manquant");
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).send("Token invalide ou expiré");
+        req.user = user; // On attache l'utilisateur à la requête pour les routes suivantes
+        next();
+    });
+};
+
+// On applique ce middleware à TOUTES les routes qui commencent par /api
+app.use('/api', authenticateToken);
 
 app.get('/api/fix-groups', async (req, res) => {
     const email = req.query.email;
