@@ -26,11 +26,13 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log("✅ Connecté à MongoDB"))
   .catch(err => console.error("❌ Erreur de connexion MongoDB:", err));
 
-const User = mongoose.model('User', { 
-    email: String, 
-    password: String, 
-    name: String 
+const userSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    name: { type: String }
 });
+
+const User = mongoose.model('User', userSchema);
 
 // 1. Le Groupe : contient uniquement l'identité du commerce
 const Group = mongoose.model('Group', { 
@@ -97,42 +99,42 @@ function generateJoinCode() {
 // --- ROUTES API ---
 
 app.post('/api/login', async (req, res) => {
-    const { email, password } = req.body;
-    let user = await User.findOne({ email });
-    
-    if (user) {
-        // Cas : Utilisateur existant
-        if (user.password !== password) {
-            return res.status(401).send("Erreur Password");
+    try {
+        const { email, password } = req.body;
+
+        // 1. RECHERCHE : On cherche l'utilisateur, rien de plus.
+        const user = await User.findOne({ email });
+
+        // 2. VÉRIFICATION : Si l'user n'existe pas OU si le password est faux
+        // On renvoie la même erreur pour ne pas aider les hackers
+        if (!user || user.password !== password) {
+            return res.status(401).json({ message: "Email ou mot de passe incorrect" });
         }
-    } else {
-        // Cas : Nouvel utilisateur (Création auto)
-        user = new User({ 
-            email, 
-            password, 
-            name: email.split('@')[0] 
+
+        // 3. SIGNATURE : On ne signe le badge que si tout est OK
+        const token = jwt.sign(
+            { userId: user._id, email: user.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        // 4. RÉPONSE : On renvoie les infos
+        res.json({ 
+            token, 
+            user: { id: user._id, email: user.email, name: user.name } 
         });
-        await user.save();
+
+    } catch (err) {
+        console.error("Erreur Login:", err);
+        res.status(500).json({ message: "Erreur serveur lors de la connexion" });
     }
-
-    // ON GÉNÈRE LE TOKEN POUR TOUT LE MONDE (Existant ou Nouveau)
-    const token = jwt.sign(
-        { userId: user._id, email: user.email },
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' }
-    );
-    
-    // On renvoie toujours la même structure
-    res.json({ user, token });
 });
-
-// --- AJOUTER CE BLOC DANS TON SERVEUR ---
 
 app.post('/api/register', async (req, res) => {
     try {
         const { name, email, password } = req.body;
 
-        // 1. Vérifier si l'utilisateur existe déjà (pour éviter les doublons)
+        // 1. Vérifier si l'utilisateur existe déjà
         const userExists = await User.findOne({ email });
         if (userExists) {
             return res.status(400).json({ message: "Cet email est déjà utilisé" });
@@ -140,15 +142,23 @@ app.post('/api/register', async (req, res) => {
 
         // 2. Créer le nouvel utilisateur
         const newUser = new User({
-            name,
+            name: name || email.split('@')[0], // Sécurité si le nom est vide
             email,
-            password // Attention : en production, il faudra hasher ce MDP
+            password 
         });
 
         await newUser.save();
 
-        // 3. Répondre avec les infos de l'utilisateur pour le connecter direct
+        // 🚀 3. GÉNÉRER LE TOKEN (Indispensable pour la suite !)
+        const token = jwt.sign(
+            { userId: newUser._id, email: newUser.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        // 4. Répondre avec l'User ET le Token
         res.status(201).json({ 
+            token,
             user: { _id: newUser._id, name: newUser.name, email: newUser.email }
         });
 
@@ -198,11 +208,11 @@ app.get('/api/fix-groups', async (req, res) => {
 
 
 app.get('/api/groups', async (req, res) => {
-    // On récupère l'email passé dans l'URL (ex: /api/groups?email=test@test.com)
-    const userEmail = req.query.email;
+    // 🛡️ On ne regarde plus l'URL, on regarde le badge certifié par le middleware
+    const userEmail = req.user.email; 
 
     try {
-        // ON FILTRE : On ne cherche que les groupes dont l'ownerEmail correspond
+        // On filtre par l'email extrait du Token
         const groups = await Group.find({ ownerEmail: userEmail });
         
         console.log(`${groups.length} groupes trouvés pour ${userEmail}`);

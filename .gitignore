@@ -1,6 +1,8 @@
 # Pour la partie Node.js/JSON
 node_modules/
 *.log
+postit-server/.env
+
 
 # Pour la partie Arduino/C++ (PlatformIO ou IDE Arduino)
 .pio/
