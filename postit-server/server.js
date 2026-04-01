@@ -11,14 +11,40 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 // --- À AJOUTER EN HAUT AVEC LES AUTRES REQUIRES ---
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const upload = multer({ dest: 'uploads/' });
+//const multer = require('multer');
+//const path = require('path');
+// const fs = require('fs');
+// const upload = multer({ dest: 'uploads/' });
 
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const multer = require('multer');
+
+// Configuration de la connexion Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configuration du dossier de stockage
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'pintalk_uploads',
+    allowed_formats: ['jpg', 'png', 'jpeg', 'pdf'],
+    // ✨ LES LIGNES MAGIQUES POUR LA COMPRESSION :
+    transformation: [
+      { width: 1000, crop: "limit" }, // Redimensionne si l'image est géante (> 1000px)
+      { quality: "auto", fetch_format: "auto" } // Compresse intelligemment selon le navigateur
+    ]
+  },
+});
+
+const upload = multer({ storage: storage });
 app.use(express.json());
 app.use(express.static('public'));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+//app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 //mongoose.connect('mongodb://localhost:27017/postit_pro_v2');
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/postit_pro_v2';
@@ -468,9 +494,19 @@ app.post('/api/archives/backup', async (req, res) => {
     }
 });
 
-app.post('/api/upload', upload.single('file'), (req, res) => {
+/*app.post('/api/upload', upload.single('file'), (req, res) => {
     if (req.file) res.json({ url: `/uploads/${req.file.filename}` });
     else res.status(400).send("Erreur");
+});*/
+
+app.post('/api/upload', authenticateToken, upload.single('file'), (req, res) => {
+    if (req.file) {
+        // IMPORTANT : Cloudinary renvoie l'URL complète dans req.file.path
+        console.log("Fichier envoyé sur Cloudinary :", req.file.path);
+        res.json({ url: req.file.path }); 
+    } else {
+        res.status(400).send("Erreur d'upload");
+    }
 });
 
 app.post('/api/groups/join', async (req, res) => {
