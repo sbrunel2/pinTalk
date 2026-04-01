@@ -16,32 +16,30 @@ const io = new Server(server);
 // const fs = require('fs');
 // const upload = multer({ dest: 'uploads/' });
 
-const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+// 1. Change l'import pour prendre l'objet racine (SANS le .v2)
+const cloudinary = require('cloudinary'); 
 const multer = require('multer');
+const CloudinaryStorage = require('multer-storage-cloudinary');
 
-// Configuration de la connexion Cloudinary
-cloudinary.config({
+// 2. Ta configuration reste la même (elle configure l'objet global)
+cloudinary.v2.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Configuration du dossier de stockage
+// 3. C'est ICI que ça se joue : on passe l'objet racine 'cloudinary'
 const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary: cloudinary, // On passe l'objet complet, PAS cloudinary.v2
   params: {
     folder: 'pintalk_uploads',
     allowed_formats: ['jpg', 'png', 'jpeg', 'pdf'],
-    // ✨ LES LIGNES MAGIQUES POUR LA COMPRESSION :
-    transformation: [
-      { width: 1000, crop: "limit" }, // Redimensionne si l'image est géante (> 1000px)
-      { quality: "auto", fetch_format: "auto" } // Compresse intelligemment selon le navigateur
-    ]
+    transformation: [{ width: 1000, crop: "limit" }, { quality: "auto", fetch_format: "auto" }]
   },
 });
 
 const upload = multer({ storage: storage });
+
 app.use(express.json());
 app.use(express.static('public'));
 //app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -93,7 +91,8 @@ const Postit = mongoose.model('Postit', {
     phone: String,       
     pickupDate: String,  
     status: { type: String, default: 'En attente' },
-    isLocked: { type: Boolean, default: false }
+    isLocked: { type: Boolean, default: false },
+	imageUrl: String
 });
 
 const Message = mongoose.model('Message', { 
@@ -434,7 +433,8 @@ app.post('/api/postits', async (req, res) => {
             phone,
             pickupDate,
             ownerEmail: userEmail, // <--- Sécurité garantie
-            status: 'En attente'
+            status: 'En attente',
+			imageUrl: imageUrl
         });
 
         const saved = await postit.save();
@@ -494,16 +494,19 @@ app.post('/api/archives/backup', async (req, res) => {
     }
 });
 
-/*app.post('/api/upload', upload.single('file'), (req, res) => {
-    if (req.file) res.json({ url: `/uploads/${req.file.filename}` });
-    else res.status(400).send("Erreur");
-});*/
-
 app.post('/api/upload', authenticateToken, upload.single('file'), (req, res) => {
+    // Petit check pour débugger : on regarde ce que Multer a mis dans req.file
+    console.log("Données reçues de Multer :", req.file);
+
     if (req.file) {
-        // IMPORTANT : Cloudinary renvoie l'URL complète dans req.file.path
-        console.log("Fichier envoyé sur Cloudinary :", req.file.path);
-        res.json({ url: req.file.path }); 
+        // 🚨 LA CORRECTION : 
+        // Sur CloudinaryStorage, l'URL se trouve dans 'path' ou 'secure_url'
+        const imageUrl = req.file.path || req.file.secure_url;
+        
+        console.log("Fichier envoyé sur Cloudinary :", imageUrl);
+        
+        // On renvoie l'URL au format attendu par ton frontend
+        res.json({ url: imageUrl }); 
     } else {
         res.status(400).send("Erreur d'upload");
     }
