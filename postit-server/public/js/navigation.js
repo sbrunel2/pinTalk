@@ -7,7 +7,11 @@ window.addEventListener('DOMContentLoaded', () => {
     const viewport = document.getElementById('viewport');
     if (viewport) {
         viewport.addEventListener('touchstart', e => { touchstartX = e.changedTouches[0].screenX; }, {passive: true});
-        viewport.addEventListener('touchend', e => { touchendX = e.changedTouches[0].screenX; handleGesture(); }, {passive: true});
+        viewport.addEventListener('touchend', e => {
+            if (e.target.closest('[id^="swipe-"]') || e.target.closest('[id^="bubble-"]')) return;
+            touchendX = e.changedTouches[0].screenX;
+            handleGesture();
+        }, {passive: true});
     }
 });
 

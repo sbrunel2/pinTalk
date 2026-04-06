@@ -432,9 +432,8 @@ app.post('/api/postits', async (req, res) => {
             orderNumber,
             phone,
             pickupDate,
-            ownerEmail: userEmail, // <--- Sécurité garantie
-            status: 'En attente',
-			imageUrl: imageUrl
+            ownerEmail: userEmail,
+            status: 'En attente'
         });
 
         const saved = await postit.save();
@@ -657,6 +656,30 @@ app.put('/api/postits/:id', async (req, res) => {
     }
 });
 
+// Route pour modifier le texte d'un message
+app.patch('/api/messages/:id', authenticateToken, async (req, res) => {
+    try {
+        const { content } = req.body;
+        if (!content || content.trim() === "") {
+            return res.status(400).send("Contenu vide non autorisé");
+        }
+        const msg = await Message.findById(req.params.id);
+        if (!msg) return res.status(404).send("Message non trouvé");
+
+        msg.content = content.trim();
+        await msg.save();
+
+        io.emit('message-content-updated', { 
+            messageId: req.params.id, 
+            newContent: msg.content 
+        });
+
+        res.sendStatus(200);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Erreur serveur");
+    }
+});
 // --- ROUTES DE SUPPRESSION ---
 app.delete('/api/groups/:id', async (req, res) => {
     try {
@@ -701,6 +724,37 @@ app.delete('/api/postits/:id', async (req, res) => {
     await Postit.findByIdAndDelete(req.params.id);
     res.sendStatus(200);
 });
+
+// Route pour supprimer un message (et son image sur Cloudinary si besoin)
+app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
+    try {
+        const msg = await Message.findById(req.params.id);
+        if (!msg) return res.status(404).send("Message non trouvé");
+
+        // Suppression Cloudinary si image
+        if (msg.type === 'image' && msg.content && msg.content.includes('cloudinary.com')) {
+            try {
+                const parts = msg.content.split('/');
+                const fileNameWithExtension = parts[parts.length - 1];
+                const publicId = 'pintalk_uploads/' + fileNameWithExtension.split('.')[0];
+                const cloudinary = require('cloudinary');
+                await cloudinary.v2.uploader.destroy(publicId);
+                console.log("Image Cloudinary supprimée:", publicId);
+            } catch (cloudErr) {
+                console.error("Avertissement Cloudinary:", cloudErr.message);
+                // On continue même si Cloudinary échoue
+            }
+        }
+
+        await Message.findByIdAndDelete(req.params.id);
+        io.emit('message-deleted', req.params.id);
+        res.sendStatus(200);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Erreur serveur");
+    }
+});
+
 
 // --- SOCKET.IO ---
 // Middleware de sécurité pour Socket.io

@@ -7,6 +7,134 @@ if (currentUser) {
     document.addEventListener('DOMContentLoaded', () => setTimeout(initApp, 200));
 }
 
+let touchStartX = 0;
+let swipeConsumed = false;
+
+function handleTouchStart(e, id) {
+    touchStartX = e.touches[0].clientX;
+    swipeConsumed = false;
+    // Fermer toutes les autres lignes ouvertes et remettre leurs z-index
+    document.querySelectorAll('[id^="swipe-"]').forEach(el => {
+        if (el.id !== 'swipe-' + id) {
+            el.style.transition = 'transform 0.2s ease';
+            el.style.transform = 'translateX(0)';
+            const otherId = el.id.replace('swipe-', '');
+            showBtn(otherId, 'none');
+        }
+    });
+}
+
+function handleTouchMove(e, id) {
+    const diffX = e.touches[0].clientX - touchStartX;
+    if (Math.abs(diffX) > 8) {
+        swipeConsumed = true;
+        e.stopPropagation();
+    }
+    if (!swipeConsumed) return;
+    const el = document.getElementById('swipe-' + id);
+    if (!el) return;
+    const clamped = Math.max(-44, Math.min(44, diffX));
+    el.style.transition = 'none';
+    el.style.transform = 'translateX(' + clamped + 'px)';
+}
+
+function showBtn(id, side) {
+    // side: 'del' ou 'edit'
+    const del  = document.getElementById('del-'  + id);
+    const edit = document.getElementById('edit-' + id);
+    if (side === 'del') {
+        if (del)  { del.style.opacity  = '1'; del.style.pointerEvents  = 'auto'; }
+        if (edit) { edit.style.opacity = '0'; edit.style.pointerEvents = 'none'; }
+    } else if (side === 'edit') {
+        if (edit) { edit.style.opacity = '1'; edit.style.pointerEvents = 'auto'; }
+        if (del)  { del.style.opacity  = '0'; del.style.pointerEvents  = 'none'; }
+    } else {
+        if (del)  { del.style.opacity  = '0'; del.style.pointerEvents  = 'none'; }
+        if (edit) { edit.style.opacity = '0'; edit.style.pointerEvents = 'none'; }
+    }
+}
+
+function handleTouchEnd(e, id) {
+    if (swipeConsumed) e.stopPropagation();
+    const diffX = e.changedTouches[0].clientX - touchStartX;
+    const el = document.getElementById('swipe-' + id);
+    if (!el) return;
+    el.style.transition = 'transform 0.2s ease';
+    if (diffX > 20) {
+        el.style.transform = 'translateX(44px)';
+        showBtn(id, 'del');
+    } else if (diffX < -20) {
+        el.style.transform = 'translateX(-44px)';
+        showBtn(id, 'edit');
+    } else {
+        el.style.transform = 'translateX(0)';
+        showBtn(id, 'none');
+    }
+    swipeConsumed = false;
+}
+
+function resetSwipe(id) {
+    const el = document.getElementById('swipe-' + id);
+    if (el) { el.style.transition = 'transform 0.2s ease'; el.style.transform = 'translateX(0)'; }
+    showBtn(id, 'none');
+}
+
+async function deleteMessage(id) {
+    resetSwipe(id);
+    try {
+        const res = await fetchAuth('/api/messages/' + id, { method: 'DELETE' });
+        if (res.ok) { allMsgs = allMsgs.filter(m => m._id !== id); refreshView(); }
+    } catch (err) { console.error(err); }
+}
+
+function editMessage(id) {
+    resetSwipe(id);
+    const msg = allMsgs.find(m => m._id === id);
+    if (!msg || msg.type === 'image') return;
+
+    const textSpan = document.getElementById('text-' + id);
+    if (!textSpan) return;
+
+    window._editingMessageId = id;
+    const originalText = msg.content;
+    textSpan.contentEditable = 'true';
+    textSpan.style.background = '#ffffff';
+    textSpan.style.color = '#000000';
+    textSpan.style.outline = '2px solid #18181b';
+    textSpan.style.padding = '1px 3px';
+    textSpan.focus();
+    const range = document.createRange();
+    range.selectNodeContents(textSpan);
+    range.collapse(false);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+
+    const save = async () => {
+        if (window._editingMessageId !== id) return;
+        window._editingMessageId = null;
+        const newText = textSpan.innerText.trim();
+        textSpan.contentEditable = 'false';
+        textSpan.style.background = '';
+        textSpan.style.color = '';
+        textSpan.style.outline = '';
+        textSpan.style.padding = '';
+        if (!newText || newText === originalText) { textSpan.innerText = originalText; return; }
+        try {
+            const res = await fetchAuth('/api/messages/' + id, {
+                method: 'PATCH',
+                body: JSON.stringify({ content: newText })
+            });
+            if (res.ok) { msg.content = newText; }
+            else { textSpan.innerText = originalText; }
+        } catch (err) { console.error(err); textSpan.innerText = originalText; }
+    };
+    textSpan.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { window._editingMessageId = null; textSpan.contentEditable = 'false'; textSpan.style.background = ''; textSpan.style.color = ''; textSpan.style.outline = ''; textSpan.innerText = originalText; }
+    };
+    textSpan.onblur = save;
+}
+
 async function fetchAuth(url, options = {}) {
     const token = localStorage.getItem('token');
     const headers = {
@@ -35,12 +163,15 @@ async function initApp() {
     });
     socket.on('message-updated', (data) => {
         const msg = allMsgs.find(m => m._id === data.messageId);
-        if (msg) {
-            msg.isNote = data.isNote;
-            // On rafraîchit la vue sans forcer le scroll en bas (false)
-            // pour ne pas perdre le fil de la lecture
-            refreshView(false); 
-        }
+        if (msg) { msg.isNote = data.isNote; refreshView(false); }
+    });
+    socket.on('message-content-updated', (data) => {
+        const msg = allMsgs.find(m => m._id === data.messageId);
+        if (msg) { msg.content = data.newContent; refreshView(false); }
+    });
+    socket.on('message-deleted', (id) => {
+        allMsgs = allMsgs.filter(m => m._id !== id);
+        refreshView(false);
     });
 	socket.on('line-checked-updated', (data) => {
 		const msg = allMsgs.find(m => m._id === data.messageId);
@@ -610,6 +741,204 @@ function changeStatusManually(pid) {
 }
 
 async function refreshView(forceScrollBottom = false) {
+    if (window._editingMessageId) return;
+    const pSel = document.getElementById('sel-pos');
+    const pid = pSel ? pSel.value : null;
+    const chat = document.getElementById('chat-history');
+    const einkSmall = document.getElementById('eink-sim');
+    const einkFull = document.getElementById('prep-content');
+    const prepHeader = document.getElementById('prep-header');
+
+    if (!chat) return;
+
+    const prevPos = chat.scrollTop;
+    const wasAtBottom = (chat.scrollHeight - chat.scrollTop <= chat.clientHeight + 50);
+
+    let headerHtml = "";
+    let prepHeaderHtml = "";
+    let currentStatus = ""; 
+
+    if (pid && pid !== "") {
+        try {
+            const res = await fetchAuth(`/api/postits/details/${pid}`);
+            const p = await res.json();
+            if (p) {
+                currentStatus = p.status;
+                let statusBg = "bg-black"; 
+                if (p.status === "En préparation") statusBg = "bg-orange-500";
+                if (p.status === "En caisse") statusBg = "bg-blue-500";
+                if (p.status === "Terminé") statusBg = "bg-green-600";
+                if (p.status === "Annulé") statusBg = "bg-gray-500";
+                
+                let formattedDate = "--/--/---- --:--";
+                if (p.pickupDate) {
+                    const d = new Date(p.pickupDate);
+                    if (!isNaN(d)) {
+                        const day = String(d.getDate()).padStart(2, '0');
+                        const month = String(d.getMonth() + 1).padStart(2, '0');
+                        const year = d.getFullYear();
+                        const hours = String(d.getHours()).padStart(2, '0');
+                        const mins = String(d.getMinutes()).padStart(2, '0');
+                        formattedDate = `${day}/${month}/${year} ${hours}:${mins}`;
+                    }
+                }
+
+                const cancelMsg = allMsgs.find(m => m.postitId === pid && m.isNote && m.content.includes("ANNULATION"));
+                const cancelCommentHtml = (p.status === "Annulé" && cancelMsg) 
+                    ? `<div class="mt-2 p-2 bg-red-50 border-l-4 border-red-500 text-[10px] font-bold text-red-700 italic">${cancelMsg.content}</div>` 
+                    : "";
+
+                const getStatusSelect = (fontSizeClass) => `
+                    <button id="btn-status-main" data-status="${p.status}" onclick="event.stopPropagation(); showStatusMenu(this, '${p._id}')" 
+                            class="${statusBg} text-white font-black uppercase ${fontSizeClass} border border-black cursor-pointer w-[95px] h-[20px] flex items-center justify-center leading-none relative z-30 active:scale-95">
+                        ${p.status === 'En préparation' ? 'Prépa.' : (p.status === 'En attente' ? 'Attente' : p.status)}
+                    </button>`;
+
+                headerHtml = `
+                <div class="p-3 border-4 border-black bg-white shadow-[4px_4px_0px_#000] mb-4">
+                    <div class="flex justify-between items-start border-b-2 border-black pb-1 mb-2">
+                        <div>
+                            <div class="text-[9px] font-black uppercase opacity-40 leading-none">Commande</div>
+                            <div class="text-xl font-black italic leading-tight">#${p.orderNumber || '---'}</div>
+                        </div>
+                        <div class="flex flex-col items-end">
+                             ${getStatusSelect('text-[9px]')}
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <div class="text-[9px] font-black uppercase opacity-40 leading-none">Client</div>
+                            <div class="text-sm font-bold leading-tight">${p.name}</div>
+                            <div class="text-[10px] font-black mt-1">
+                                ${p.phone ? `📞 <a href="tel:${p.phone}" onclick="return confirm('Appeler le ${p.phone} ?')" class="underline text-blue-600">${p.phone}</a>` : ''}
+                            </div>
+                        </div>
+                        <div class="text-right text-[10px] font-black opacity-60">${formattedDate}</div>
+                    </div>
+                    ${cancelCommentHtml}
+                </div>`;
+
+                prepHeaderHtml = `
+                <div class="p-3 border-4 border-black bg-white shadow-[4px_4px_0px_#000]">
+                    <div class="flex justify-between items-start border-b-2 border-black pb-2 mb-2">
+                        <div>
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-[10px] font-black uppercase opacity-40">Statut</span>
+                                ${getStatusSelect('text-[8px]')}
+                            </div>
+                            <div class="text-3xl font-black italic leading-none text-red-600">#${p.orderNumber || '---'}</div>
+                        </div>
+                        
+                        <button onclick="goToPage(1)" class="bg-blue-50 text-blue-600 p-3 border-2 border-blue-200 shadow-[2px_2px_0px_#bfdbfe] flex items-center justify-center active:shadow-none active:translate-x-[1px] active:translate-y-[1px]">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 1 1 0 8h-1"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <span class="text-[10px] font-black uppercase opacity-40 block">Client</span>
+                            <span class="text-xl font-black leading-none">${p.name}</span>
+                            <div class="text-sm font-black mt-1 text-blue-600">
+                                ${p.phone ? `📞 <a href="tel:${p.phone}" onclick="return confirm('Lancer l'appel vers le ${p.phone} ?')" class="underline">${p.phone}</a>` : ''}
+                            </div>
+                        </div>
+                        <div class="text-right text-[12px] font-black">${formattedDate}</div>
+                    </div>
+                    ${cancelCommentHtml}
+                </div>`;
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    const forEink = allMsgs.filter(m => m.postitId === pid && !m.isNote && m.type !== 'image');
+    const einkHtml = forEink.map(m => {
+        const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");        
+        const boxClass = m.checked ? "bg-green-500 border-black text-white" : "bg-white border-black text-transparent";
+        const textStyle = m.checked ? "color: #a1a1aa; text-decoration: line-through;" : "color: #000;";
+        const opacityClass = isLocked ? "opacity-50 cursor-not-allowed" : "cursor-pointer";
+        
+        return `
+        <div class="flex items-center gap-3 mb-2 group ${opacityClass}" 
+             onclick="event.stopPropagation(); ${isLocked ? "console.log('Liste verrouillée')" : `toggleLineCheck('${m._id}')`}">
+            <div class="w-5 h-5 border-2 flex-shrink-0 flex items-center justify-center transition-colors ${boxClass}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+            <span class="text-[13px] font-bold" style="${textStyle}; word-break:break-word; overflow-wrap:break-word; white-space:normal; min-width:0;">${m.content}</span>
+        </div>`;
+    }).join('');
+
+    if (einkSmall) einkSmall.innerHTML = einkHtml;
+    if (einkFull) einkFull.innerHTML = einkHtml;
+    if (prepHeader) prepHeader.innerHTML = prepHeaderHtml;
+
+    if (chat) {
+        const filtered = allMsgs.filter(m => m.postitId === pid);
+        chat.innerHTML = (pid ? headerHtml : "") + [...filtered].reverse().map(m => {
+            const isMe = (currentUser && m.senderName === currentUser.name);
+            const noteClass = m.isNote ? "opacity-30 italic" : "";
+            const bubbleBg = isMe ? "bg-[#18181b] text-white" : "bg-white text-black";
+            const tagStyle = isMe ? "bg-white text-black" : "bg-black text-white";
+
+            let contentHtml = `<span id="text-${m._id}" style="font-size:13px; font-weight:700; line-height:1.4; word-break:break-word; overflow-wrap:break-word; white-space:pre-wrap; flex:1;">${m.content}</span>`;
+            if (m.type === 'image') {
+                contentHtml = `
+                <div class="flex-1 py-1">
+                    <img src="${m.content}" 
+                         class="max-w-[80px] aspect-square object-cover border-2 border-black shadow-[2px_2px_0px_#000] cursor-pointer active:scale-95 transition-transform" 
+                         onclick="openFullImage('${m.content}')"
+                         alt="Document">
+                </div>`;
+            }
+
+            return `
+            <div class="msg-row ${isMe ? 'me' : 'others'} ${noteClass} mb-2">
+
+                <div id="swipe-${m._id}"
+                     class="msg-bubble"
+                     style="position:relative; max-width:75%;
+                            word-break:break-word; overflow-wrap:break-word;
+                            transform:translateX(0); transition:transform 0.2s ease;"
+                     ontouchstart="handleTouchStart(event,'${m._id}')"
+                     ontouchmove="handleTouchMove(event,'${m._id}')"
+                     ontouchend="handleTouchEnd(event,'${m._id}')">
+
+                    <button id="del-${m._id}"
+                            ontouchend="event.stopPropagation(); deleteMessage('${m._id}')"
+                            style="position:absolute; top:0; bottom:0; right:100%;
+                                   width:44px; background:transparent;
+                                   border:none; font-size:22px; cursor:pointer;
+                                   display:flex; align-items:center; justify-content:center;
+                                   opacity:0; pointer-events:none;
+                                   transition:opacity 0.2s;">🗑️</button>
+
+                    <button id="edit-${m._id}"
+                            ontouchend="event.stopPropagation(); editMessage('${m._id}')"
+                            style="position:absolute; top:0; bottom:0; left:100%;
+                                   width:44px; background:transparent;
+                                   border:none; font-size:22px; cursor:pointer;
+                                   display:flex; align-items:center; justify-content:center;
+                                   opacity:0; pointer-events:none;
+                                   transition:opacity 0.2s;">🖍️</button>
+
+                    <div style="display:flex; align-items:flex-start; gap:6px;">
+                        <span class="msg-author-tag" style="flex-shrink:0;">${isMe ? 'Moi' : m.senderName}</span>
+                        ${contentHtml}
+                        <button ontouchend="event.stopPropagation(); toggleNote('${m._id}')"
+                                style="flex-shrink:0; font-size:14px; background:none; border:none; cursor:pointer;">
+                            ${m.isNote ? '🚫' : '👁️'}</button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+
+        if (forceScrollBottom || wasAtBottom) { chat.scrollTop = chat.scrollHeight; } 
+        else { chat.scrollTop = prevPos; }
+    }
+}
+
+/*
+async function refreshView(forceScrollBottom = false) {
     const pSel = document.getElementById('sel-pos');
     const pid = pSel ? pSel.value : null;
     const chat = document.getElementById('chat-history');
@@ -780,6 +1109,7 @@ async function refreshView(forceScrollBottom = false) {
         else { chat.scrollTop = prevPos; }
     }
 }
+*/
 
 function openFullImage(url) {
     const win = window.open("");
