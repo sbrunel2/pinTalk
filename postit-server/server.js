@@ -58,20 +58,34 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// 1. Le Groupe : contient uniquement l'identité du commerce
-const Group = mongoose.model('Group', { 
-    name: String, 
-    ownerEmail: String,
-    joinCode: { type: String, unique: true } // Le code pour Mme Michu
+// 1. Le Groupe
+const groupSchema = new mongoose.Schema({
+    name:       { type: String, required: true },
+    ownerEmail: { type: String, required: true },
+    joinCode:   { type: String, unique: true },
+    // Type de groupe : 'perso' (gratuit, max 5 postits) ou 'pro' (payant, illimité)
+    type:       { type: String, enum: ['perso', 'pro'], default: 'perso' },
+    isPro:      { type: Boolean, default: false },
+    // Infos pro (SIRET, tel, email pro)
+    siret:      String,
+    phonePro:   String,
+    emailPro:   String,
+    // Abonnement Stripe (on stocke l'ID pour la gestion future)
+    stripeSubscriptionId: String,
+    subscriptionStatus:   { type: String, default: 'inactive' }, // inactive | active | past_due
+    // Groupe créé automatiquement à l'inscription ?
+    isDefault:  { type: Boolean, default: false }
 });
+const Group = mongoose.model('Group', groupSchema);
 
 // 2. Les Permissions : chaque ligne est un lien entre UN utilisateur et UN groupe
 const Permission = mongoose.model('Permission', {
-    groupId: String,    // L'ID du groupe (ex: ID de la Boucherie)
-    guestEmail: String, // L'email de Mme Michu ou Thierry
+    groupId:    String,
+    guestEmail: String,
     role: { 
         type: String, 
-        enum: ['employe', 'client'], 
+        // admin : peut gérer membres | employe/preparateur | client/participant
+        enum: ['admin', 'employe', 'client'], 
         default: 'client' 
     }
 });
@@ -181,7 +195,44 @@ app.post('/api/register', async (req, res) => {
             { expiresIn: '7d' }
         );
 
-        // 4. Répondre avec l'User ET le Token
+        // 4. Créer le groupe perso par défaut
+        try {
+            const firstName = (newUser.name || email.split('@')[0]).split(' ')[0];
+            const defaultGroup = new Group({
+                name: `Groupe de ${newUser.name || firstName}`,
+                ownerEmail: newUser.email,
+                joinCode: generateJoinCode(),
+                type: 'perso',
+                isPro: false,
+                isDefault: true
+            });
+            const savedGroup = await defaultGroup.save();
+
+            // Créer le rayon par défaut (invisible pour perso)
+            const defaultDevice = new Device({
+                name: 'DEFAUT',
+                groupId: savedGroup._id,
+                ownerEmail: newUser.email,
+                mac: '00'
+            });
+            const savedDevice = await defaultDevice.save();
+
+            // Créer le premier postit par défaut
+            await new Postit({
+                name: 'DEFAUT',
+                deviceId: savedDevice._id,
+                ownerEmail: newUser.email,
+                pickupDate: new Date().toISOString(),
+                status: 'En attente'
+            }).save();
+
+            console.log(`[REGISTER] Groupe perso créé pour ${newUser.email} : ${savedGroup.name}`);
+        } catch (groupErr) {
+            console.error("Avertissement création groupe par défaut:", groupErr.message);
+            // On continue même si la création du groupe échoue
+        }
+
+        // 5. Répondre avec l'User ET le Token
         res.status(201).json({ 
             token,
             user: { _id: newUser._id, name: newUser.name, email: newUser.email }
@@ -232,15 +283,12 @@ app.get('/api/fix-groups', async (req, res) => {
 });
 
 
+// Groupes dont je suis propriétaire (compatibilité existante)
 app.get('/api/groups', async (req, res) => {
-    // 🛡️ On ne regarde plus l'URL, on regarde le badge certifié par le middleware
     const userEmail = req.user.email; 
-
     try {
-        // On filtre par l'email extrait du Token
         const groups = await Group.find({ ownerEmail: userEmail });
-        
-        console.log(`${groups.length} groupes trouvés pour ${userEmail}`);
+        console.log(`${groups.length} groupes (proprio) pour ${userEmail}`);
         res.json(groups);
     } catch (err) {
         console.error("Erreur récup groupes:", err);
@@ -248,32 +296,128 @@ app.get('/api/groups', async (req, res) => {
     }
 });
 
+// NOUVELLE ROUTE : Tous les groupes accessibles (proprio + membre)
+app.get('/api/groups/mine', async (req, res) => {
+    const userEmail = req.user.email;
+    try {
+        // Groupes dont je suis proprio
+        const ownedGroups = await Group.find({ ownerEmail: userEmail });
+
+        // Groupes où j'ai une permission
+        const perms = await Permission.find({ guestEmail: userEmail });
+        const memberGroupIds = perms.map(p => p.groupId);
+        const memberGroups = await Group.find({ _id: { $in: memberGroupIds } });
+
+        // Fusionner sans doublons
+        const allGroupIds = new Set(ownedGroups.map(g => g._id.toString()));
+        const merged = [...ownedGroups];
+        for (const g of memberGroups) {
+            if (!allGroupIds.has(g._id.toString())) {
+                merged.push(g);
+            }
+        }
+
+        // Ajouter le rôle de l'utilisateur dans chaque groupe
+        const result = merged.map(g => {
+            const isOwner = g.ownerEmail === userEmail;
+            const perm = perms.find(p => p.groupId === g._id.toString());
+            return {
+                ...g.toObject(),
+                myRole: isOwner ? 'owner' : (perm ? perm.role : 'client')
+            };
+        });
+
+        console.log(`[MINE] ${result.length} groupes accessibles pour ${userEmail}`);
+        res.json(result);
+    } catch (err) {
+        console.error("Erreur /api/groups/mine:", err);
+        res.status(500).send("Erreur serveur");
+    }
+});
+
+// Config d'un groupe (type, hasRayons, maxPostits, myRole)
+app.get('/api/groups/:id/config', async (req, res) => {
+    const userEmail = req.user.email;
+    try {
+        const group = await Group.findById(req.params.id);
+        if (!group) return res.status(404).send("Groupe introuvable");
+
+        const isOwner = group.ownerEmail === userEmail;
+        const perm = isOwner ? null : await Permission.findOne({ groupId: group._id, guestEmail: userEmail });
+        const myRole = isOwner ? 'owner' : (perm ? perm.role : null);
+
+        if (!myRole) return res.status(403).send("Accès refusé");
+
+        res.json({
+            _id: group._id,
+            name: group.name,
+            type: group.type || 'perso',
+            isPro: group.isPro || false,
+            isDefault: group.isDefault || false,
+            // Perso = pas de rayons visibles, Pro = rayons visibles
+            hasRayons: group.isPro === true,
+            // Perso = max 5 postits actifs, Pro = illimité
+            maxPostits: group.isPro ? 0 : 5,
+            myRole,
+            joinCode: isOwner ? group.joinCode : null
+        });
+    } catch (err) {
+        console.error("Erreur /api/groups/:id/config:", err);
+        res.status(500).send("Erreur serveur");
+    }
+});
+
 
 app.post('/api/groups', async (req, res) => {
     try {
-        // 1. On ne récupère que le 'name' depuis le body. 
-        // 🗑️ On retire 'ownerEmail' de la déstructuration.
-        const { name } = req.body;
-        
-        // 2. 🔑 On récupère l'email SECURISE depuis le token (grâce au middleware)
+        const { name, type, siret, phonePro, emailPro } = req.body;
         const userEmail = req.user.email; 
         
         if (!name) return res.status(400).send("Le nom du groupe est obligatoire");
 
-        // 3. Création du groupe avec l'email du Token
+        const groupType = type === 'pro' ? 'pro' : 'perso';
+        const isPro = groupType === 'pro';
+
+        // Vérification limite postits pour perso : max 5 postits par groupe perso (vérif côté postit)
+        
         const g = new Group({ 
-            name: name,
-            ownerEmail: userEmail, // <--- C'est l'email du badge !
-            joinCode: generateJoinCode() 
+            name,
+            ownerEmail: userEmail,
+            joinCode: generateJoinCode(),
+            type: groupType,
+            isPro,
+            siret: isPro ? siret : undefined,
+            phonePro: isPro ? phonePro : undefined,
+            emailPro: isPro ? (emailPro || userEmail) : undefined,
+            subscriptionStatus: isPro ? 'pending' : 'inactive'
         });
 
         const savedGroup = await g.save();
-        
-        console.log(`[V3] Groupe créé : ${savedGroup.name} (Code: ${savedGroup.joinCode}) par ${userEmail}`);
+        console.log(`[POST Groupe] ${groupType.toUpperCase()} créé : ${savedGroup.name} par ${userEmail}`);
         res.json(savedGroup);
     } catch (err) {
         console.error("Erreur création groupe:", err);
         res.status(500).send("Erreur lors de la création du groupe");
+    }
+});
+
+// Mise à jour infos groupe (nom, type, infos pro)
+app.put('/api/groups/:id', async (req, res) => {
+    const userEmail = req.user.email;
+    try {
+        const group = await Group.findById(req.params.id);
+        if (!group) return res.status(404).send("Groupe introuvable");
+        if (group.ownerEmail !== userEmail) return res.status(403).send("Accès refusé");
+
+        const { name, siret, phonePro, emailPro } = req.body;
+        if (name) group.name = name;
+        if (siret !== undefined) group.siret = siret;
+        if (phonePro !== undefined) group.phonePro = phonePro;
+        if (emailPro !== undefined) group.emailPro = emailPro;
+        await group.save();
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).send("Erreur serveur");
     }
 });
 
@@ -420,9 +564,29 @@ app.post('/api/postits', async (req, res) => {
         const { deviceId, name, orderNumber, phone, pickupDate } = req.body;
         const userEmail = req.user.email; // 🔑 Identité certifiée par le Token
 
-        // 2. Vérification des infos minimales (sans l'email du body donc)
+        // 2. Vérification des infos minimales
         if (!deviceId || !name) {
             return res.status(400).send("Données manquantes (Rayon ou Nom du client)");
+        }
+
+        // 3. Vérification limite 5 postits pour groupes perso
+        const device = await Device.findById(deviceId);
+        if (device) {
+            const group = await Group.findById(device.groupId);
+            if (group && !group.isPro) {
+                // Compter les postits actifs du groupe
+                const deviceIds = (await Device.find({ groupId: group._id })).map(d => d._id);
+                const count = await Postit.countDocuments({ 
+                    deviceId: { $in: deviceIds },
+                    status: { $nin: ['Terminé', 'Annulé', 'En caisse'] }
+                });
+                if (count >= 5) {
+                    return res.status(403).json({ 
+                        message: "Limite de 5 post-its atteinte pour un groupe gratuit. Passez au plan Pro pour en créer davantage.",
+                        limitReached: true
+                    });
+                }
+            }
         }
 
         // 3. Création du Post-it "tatoué" avec l'email du Token
@@ -574,42 +738,121 @@ app.get('/api/archives', async (req, res) => {
     }
 });
 
+// GET membres (owner ou admin uniquement)
 app.get('/api/groups/:id/members', async (req, res) => {
     try {
         const groupId = req.params.id;
-        const userEmail = req.user.email; // 🔑 Identité du demandeur
+        const userEmail = req.user.email;
 
-        // 1. VÉRIFICATION DE SÉCURITÉ : Est-ce que le demandeur est le patron ?
         const group = await Group.findById(groupId);
         if (!group) return res.status(404).send("Groupe introuvable.");
 
-        if (group.ownerEmail !== userEmail) {
-            return res.status(403).send("Accès refusé : Seul le propriétaire peut voir la liste des membres.");
+        // Owner ou admin peuvent voir les membres
+        const isOwner = group.ownerEmail === userEmail;
+        if (!isOwner) {
+            const adminPerm = await Permission.findOne({ groupId, guestEmail: userEmail, role: 'admin' });
+            if (!adminPerm) return res.status(403).send("Accès refusé.");
         }
 
-        // 2. Si c'est bien le patron, on va chercher les permissions (employés + clients)
-        const perms = await Permission.find({ groupId: groupId });
-        
-        // 3. On transforme pour le front-end
-        const members = perms.map(p => ({
-            email: p.guestEmail,
-            role: p.role
-        }));
-
-        console.log(`[GET] Liste membres envoyée pour le groupe ${group.name} à ${userEmail}`);
+        const perms = await Permission.find({ groupId });
+        const members = perms.map(p => ({ email: p.guestEmail, role: p.role, id: p._id }));
         res.json(members);
-
     } catch (err) {
         console.error("Erreur récup membres:", err);
         res.status(500).send("Erreur serveur");
     }
 });
 
-// --- NOUVELLES ROUTES DE MISE À JOUR (UPDATE) ---
-app.put('/api/groups/:id', async (req, res) => {
-    await Group.findByIdAndUpdate(req.params.id, { name: req.body.name });
-    res.sendStatus(200);
+// Inviter un membre dans un groupe (owner ou admin)
+app.post('/api/groups/:id/members', async (req, res) => {
+    try {
+        const groupId = req.params.id;
+        const userEmail = req.user.email;
+        const { email, role } = req.body;
+
+        if (!email) return res.status(400).send("Email requis");
+
+        const group = await Group.findById(groupId);
+        if (!group) return res.status(404).send("Groupe introuvable.");
+
+        const isOwner = group.ownerEmail === userEmail;
+        if (!isOwner) {
+            const adminPerm = await Permission.findOne({ groupId, guestEmail: userEmail, role: 'admin' });
+            if (!adminPerm) return res.status(403).send("Accès refusé.");
+        }
+
+        // Vérifier que l'utilisateur invité existe
+        const invitedUser = await User.findOne({ email });
+        if (!invitedUser) return res.status(404).send("Utilisateur introuvable.");
+
+        // Vérifier qu'il n'est pas déjà membre
+        const existing = await Permission.findOne({ groupId, guestEmail: email });
+        if (existing) return res.status(409).send("Déjà membre de ce groupe.");
+
+        const validRoles = ['admin', 'employe', 'client'];
+        const finalRole = validRoles.includes(role) ? role : 'client';
+
+        const perm = new Permission({ groupId, guestEmail: email, role: finalRole });
+        await perm.save();
+
+        console.log(`[INVITE] ${email} ajouté dans groupe ${group.name} en tant que ${finalRole}`);
+        res.json({ email, role: finalRole });
+    } catch (err) {
+        console.error("Erreur ajout membre:", err);
+        res.status(500).send("Erreur serveur");
+    }
 });
+
+// Modifier le rôle d'un membre
+app.put('/api/groups/:id/members/:email', async (req, res) => {
+    try {
+        const { id: groupId, email } = req.params;
+        const { role } = req.body;
+        const userEmail = req.user.email;
+
+        const group = await Group.findById(groupId);
+        if (!group) return res.status(404).send("Groupe introuvable.");
+        if (group.ownerEmail !== userEmail) return res.status(403).send("Seul le propriétaire peut modifier les rôles.");
+
+        const validRoles = ['admin', 'employe', 'client'];
+        if (!validRoles.includes(role)) return res.status(400).send("Rôle invalide.");
+
+        const perm = await Permission.findOneAndUpdate(
+            { groupId, guestEmail: email },
+            { role },
+            { new: true }
+        );
+        if (!perm) return res.status(404).send("Membre introuvable.");
+        res.json({ email, role });
+    } catch (err) {
+        res.status(500).send("Erreur serveur");
+    }
+});
+
+// Supprimer un membre d'un groupe
+app.delete('/api/groups/:id/members/:email', async (req, res) => {
+    try {
+        const { id: groupId, email } = req.params;
+        const userEmail = req.user.email;
+
+        const group = await Group.findById(groupId);
+        if (!group) return res.status(404).send("Groupe introuvable.");
+
+        const isOwner = group.ownerEmail === userEmail;
+        if (!isOwner) {
+            const adminPerm = await Permission.findOne({ groupId, guestEmail: userEmail, role: 'admin' });
+            if (!adminPerm) return res.status(403).send("Accès refusé.");
+        }
+
+        await Permission.deleteOne({ groupId, guestEmail: email });
+        console.log(`[REMOVE MEMBER] ${email} retiré du groupe ${groupId}`);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).send("Erreur serveur");
+    }
+});
+
+// --- ROUTES DE MISE À JOUR (UPDATE) ---
 
 app.put('/api/devices/:id', async (req, res) => {
     await Device.findByIdAndUpdate(req.params.id, { name: req.body.name });
