@@ -1,10 +1,158 @@
 let socket;
 let allMsgs = [];
 let currentUser = JSON.parse(localStorage.getItem('user'));
+let currentGroupId = localStorage.getItem('currentGroupId') || null;
+let currentGroupConfig = null; // { type, isPro, hasRayons, myRole, name }
+
+// ─── HEADER RÉDUCTIBLE ───────────────────────────────────────────────────────
+let headerCollapsed = localStorage.getItem('headerCollapsed') === '1';
+
+function toggleHeader() {
+    headerCollapsed = !headerCollapsed;
+    localStorage.setItem('headerCollapsed', headerCollapsed ? '1' : '0');
+    applyHeaderState();
+}
+
+function applyHeaderState() {
+    const hdr = document.getElementById('fixed-header');
+    const icon = document.getElementById('header-toggle-icon');
+    if (!hdr) return;
+    if (headerCollapsed) {
+        hdr.classList.add('collapsed');
+        if (icon) icon.innerText = '▼';
+    } else {
+        hdr.classList.remove('collapsed');
+        if (icon) icon.innerText = '▲';
+    }
+}
+
+function setUserDisplay() {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const el = document.getElementById('user-name-display');
+    if (el && user.name) el.innerText = user.name + (user.email ? ' (' + user.email + ')' : '');
+}
 
 if (currentUser) {
     document.getElementById('auth-screen').classList.add('hidden');
     document.addEventListener('DOMContentLoaded', () => setTimeout(initApp, 200));
+}
+
+// ─── GROUPES : liste + sélection ─────────────────────────────────────────────
+async function loadGroupsList() {
+    const container = document.getElementById('groups-list-container');
+    if (!container) return;
+    container.innerHTML = '<p style="text-align:center;opacity:0.3;font-size:11px;margin-top:30px;">Chargement…</p>';
+    try {
+        const res = await fetchAuth('/api/groups/mine');
+        if (!res.ok) { container.innerHTML = '<p style="text-align:center;opacity:0.4;margin-top:30px;">Erreur chargement.</p>'; return; }
+        const groups = await res.json();
+        if (!groups.length) {
+            container.innerHTML = '<p style="text-align:center;opacity:0.4;font-size:11px;margin-top:40px;">Aucun groupe.<br>Créez-en un dans Paramètres.</p>';
+            return;
+        }
+        container.innerHTML = groups.map(g => {
+            const badge = g.isPro
+                ? '<span style="background:#18181b;color:#fff;font-size:8px;font-weight:900;padding:2px 6px;margin-right:6px;">PRO</span>'
+                : '<span style="background:#e5e7eb;color:#6b7280;font-size:8px;font-weight:900;padding:2px 6px;margin-right:6px;">PERSO</span>';
+            const roleMap = {owner:'✦ Propriétaire', admin:'🔑 Admin', employe:'👷 Employé', client:'👤 Membre'};
+            const roleLabel = roleMap[g.myRole] || '';
+            const isActive = g._id === currentGroupId;
+            const bdr = isActive ? 'border-left:4px solid #18181b;background:#fff;box-shadow:2px 2px 0 #000;' : 'border-left:4px solid transparent;background:rgba(255,255,255,0.7);';
+            return `<div onclick="selectGroup('${g._id}')"
+                         style="${bdr}margin-bottom:12px;padding:14px;cursor:pointer;border-bottom:1px solid rgba(0,0,0,0.07);">
+                <div style="display:flex;align-items:center;margin-bottom:3px;">${badge}<span style="font-size:15px;font-weight:900;text-transform:uppercase;">${g.name}</span></div>
+                <div style="font-size:10px;opacity:0.5;font-weight:700;">${roleLabel}</div>
+            </div>`;
+        }).join('');
+    } catch(err) { console.error('loadGroupsList:', err); }
+}
+
+async function selectGroup(groupId) {
+    currentGroupId = groupId;
+    localStorage.setItem('currentGroupId', groupId);
+    try {
+        const res = await fetchAuth('/api/groups/' + groupId + '/config');
+        currentGroupConfig = res.ok ? await res.json() : { type:'perso', isPro:false, hasRayons:false };
+    } catch(e) { currentGroupConfig = { type:'perso', isPro:false, hasRayons:false }; }
+    applyGroupConfig();
+    const stGrp = document.getElementById('st-grp');
+    if (stGrp) stGrp.innerText = (currentGroupConfig.name || '...').toUpperCase();
+    const selG = document.getElementById('sel-group');
+    if (selG) selG.value = groupId;
+    await loadGroupData(groupId);
+    await loadMembers(groupId);
+    loadGroupsList();
+    goToPage(PAGE_CHAT);
+}
+
+function applyGroupConfig() {
+    const cfg = currentGroupConfig || {};
+    const canManageMembers = cfg.myRole === 'owner' || cfg.myRole === 'admin';
+
+    const els = {
+        'sel-dev-wrap':     cfg.hasRayons,
+        'order-banner':     cfg.isPro,      // bandeau commande seulement si Pro
+        'acc-rayons':       cfg.hasRayons,
+        'order-pro-fields': cfg.isPro,
+        'acc-membres':      canManageMembers
+    };
+    Object.entries(els).forEach(([id, show]) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+    });
+}
+
+async function uiInviteMember(e) {
+    if (e) e.stopPropagation();
+    const gid = currentGroupId;
+    if (!gid) return alert("Sélectionnez un groupe d'abord (page Groupes).");
+    const email = prompt("Email du membre à inviter :");
+    if (!email || !email.includes('@')) return;
+    const role = prompt("Rôle : client / employe / admin", "client") || "client";
+    try {
+        const res = await fetchAuth('/api/groups/' + gid + '/members', {
+            method: 'POST',
+            body: JSON.stringify({ email: email.trim(), role: role.trim() })
+        });
+        if (res.ok) { alert('✅ Membre ajouté.'); await loadMembers(gid); }
+        else alert('Erreur : ' + await res.text());
+    } catch(err) { console.error(err); }
+}
+
+async function loadMembers(groupId) {
+    const container = document.getElementById('list-members');
+    if (!container || !groupId) return;
+    try {
+        const res = await fetchAuth('/api/groups/' + groupId + '/members');
+        if (!res.ok) {
+            container.innerHTML = '<p style="font-size:10px;opacity:0.4;padding:8px;">Accès réservé au propriétaire.</p>';
+            return;
+        }
+        const members = await res.json();
+        if (!members.length) {
+            container.innerHTML = '<p style="font-size:10px;opacity:0.4;padding:8px;">Aucun membre pour l\'instant.</p>';
+            return;
+        }
+        const roleMap = {owner:'Propriétaire', admin:'Admin', employe:'Employé', client:'Client'};
+        container.innerHTML = members.map(m => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid rgba(0,0,0,0.08);">
+                <div>
+                    <div style="font-size:11px;font-weight:900;">${m.email}</div>
+                    <div style="font-size:9px;opacity:0.5;text-transform:uppercase;">${roleMap[m.role]||m.role}</div>
+                </div>
+                <button onclick="removeMember('${groupId}','${m.email}')"
+                        style="font-size:16px;background:none;border:none;cursor:pointer;opacity:0.4;padding:4px;">✕</button>
+            </div>`).join('');
+    } catch(err) { console.error('loadMembers:', err); }
+}
+
+async function removeMember(groupId, email) {
+    if (!confirm('Retirer ' + email + ' du groupe ?')) return;
+    try {
+        const res = await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), { method: 'DELETE' });
+        if (res.ok) await loadMembers(groupId);
+        else alert('Erreur : ' + await res.text());
+    } catch(err) { console.error(err); }
 }
 
 let touchStartX = 0;
@@ -137,6 +285,11 @@ function editMessage(id) {
 
 async function fetchAuth(url, options = {}) {
     const token = localStorage.getItem('token');
+    if (!token) {
+        // Pas de token : rediriger vers login si pas déjà sur auth-screen
+        console.warn('fetchAuth: token manquant pour', url);
+        return new Response(JSON.stringify({message: 'Non authentifié'}), {status: 401});
+    }
     const headers = {
         ...options.headers,
         'Authorization': `Bearer ${token}`,
@@ -189,8 +342,23 @@ async function initApp() {
 			refreshView(false);
 		}
 	});
+    applyHeaderState();
+    setUserDisplay();
     await loadGroups();
     await refreshParamsLists();
+    // Restaurer la config UI du dernier groupe visité
+    if (currentGroupId) {
+        try {
+            const res = await fetchAuth('/api/groups/' + currentGroupId + '/config');
+            if (res.ok) {
+                currentGroupConfig = await res.json();
+                applyGroupConfig();
+                // Mettre à jour le badge GRP dans le header
+                const stGrp = document.getElementById('st-grp');
+                if (stGrp && currentGroupConfig.name) stGrp.innerText = currentGroupConfig.name.toUpperCase();
+            }
+        } catch(e) { console.warn('config restore:', e); }
+    }
 }
 
 // --- UTILITAIRES ---
@@ -204,58 +372,93 @@ let lastCreatedId = null;
 
 async function uiCreateGroup(e) {
     if(e) e.stopPropagation();
-    const user = JSON.parse(localStorage.getItem('user'));
-    if (!user) return;
+    document.getElementById('create-group-modal')?.remove();
 
-    openCustomPrompt("Nom du nouveau groupe", "", async (name) => {
-        if (!name || name.trim() === "") return;
+    const modalHtml = `
+    <div id="create-group-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
+        <div style="background:var(--bg);border:3px solid #18181b;box-shadow:6px 6px 0 #000;padding:20px;width:100%;max-width:380px;margin-top:20px;">
+            <h3 style="font-size:14px;font-weight:900;text-transform:uppercase;margin-bottom:16px;">Nouveau Groupe</h3>
 
+            <input type="text" id="cg-name" placeholder="Nom du groupe *"
+                   style="width:100%;border:2px solid #18181b;padding:10px;font-size:13px;margin-bottom:12px;display:block;background:white;box-sizing:border-box;">
+
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:14px;font-weight:900;font-size:12px;text-transform:uppercase;padding:10px;background:white;border:2px solid #18181b;">
+                <input type="checkbox" id="cg-pro" onchange="toggleProFields()"
+                       style="width:20px;height:20px;cursor:pointer;flex-shrink:0;">
+                Groupe Professionnel (payant)
+            </label>
+
+            <div id="cg-pro-fields" style="display:none;border-top:2px solid rgba(0,0,0,0.15);padding-top:12px;margin-bottom:4px;">
+                <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:8px;">Informations entreprise</div>
+                <input type="text"  id="cg-company"  placeholder="Nom entreprise"      style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
+                <input type="text"  id="cg-siret"    placeholder="SIRET (optionnel)"   style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
+                <input type="tel"   id="cg-phone"    placeholder="Téléphone"           style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
+                <input type="email" id="cg-email"    placeholder="Email professionnel" style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
+                <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;margin-top:4px;">Logo (optionnel)</div>
+                <input type="file"  id="cg-logo"     accept="image/*"                  style="width:100%;border:2px solid #18181b;padding:6px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:16px;">
+                <button onclick="document.getElementById('create-group-modal').remove()"
+                        style="flex:1;padding:12px;border:2px solid #18181b;background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+                <button onclick="submitCreateGroup()"
+                        style="flex:1;padding:12px;background:#18181b;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Créer</button>
+            </div>
+        </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    setTimeout(() => document.getElementById('cg-name')?.focus(), 100);
+}
+
+function toggleProFields() {
+    const isPro = document.getElementById('cg-pro')?.checked;
+    const fields = document.getElementById('cg-pro-fields');
+    if (fields) fields.style.display = isPro ? '' : 'none';
+}
+
+async function submitCreateGroup() {
+    const name = document.getElementById('cg-name')?.value?.trim();
+    if (!name) return alert("Le nom du groupe est obligatoire.");
+
+    const isPro = document.getElementById('cg-pro')?.checked || false;
+    const payload = {
+        name,
+        type: isPro ? 'pro' : 'perso',
+        siret:    document.getElementById('cg-siret')?.value?.trim() || '',
+        phonePro: document.getElementById('cg-phone')?.value?.trim() || '',
+        emailPro: document.getElementById('cg-email')?.value?.trim() || ''
+    };
+
+    // Upload logo si présent
+    const logoFile = document.getElementById('cg-logo')?.files?.[0];
+    if (logoFile && isPro) {
         try {
-            // ÉTAPE 1 : Créer le Groupe
-            const resG = await fetchAuth('/api/groups', {
-                method: 'POST',
-                body: JSON.stringify({ name: name.trim()})
-            });
-            const newGroup = await resG.json();
+            const formData = new FormData();
+            formData.append('file', logoFile);
+            const token = localStorage.getItem('token');
+            const upRes = await fetch('/api/upload', { method:'POST', headers:{'Authorization':`Bearer ${token}`}, body: formData });
+            if (upRes.ok) { const d = await upRes.json(); payload.logoUrl = d.url; }
+        } catch(e) { console.warn('upload logo:', e); }
+    }
 
-            if (newGroup && newGroup._id) {
-                // ÉTAPE 2 : Créer le Rayon DEFAUT
-                const resD = await fetchAuth('/api/devices', {
-                    method: 'POST',
-                    body: JSON.stringify({ 
-                        name: "DEFAUT", 
-                        groupId: newGroup._id
-                    })
-                });
-                const newDev = await resD.json();
+    const res = await fetchAuth('/api/groups', { method: 'POST', body: JSON.stringify(payload) });
+    document.getElementById('create-group-modal')?.remove();
 
-                // ÉTAPE 3 : Créer le Post-it DEFAUT
-                await fetchAuth('/api/postits', {
-                    method: 'POST',
-                    body: JSON.stringify({ 
-                        name: "DEFAUT", 
-                        deviceId: newDev._id, 
-                        pickupDate: new Date().toISOString()
-                    })
-                });
-
-                // ÉTAPE 4 : Recharger l'interface sur le nouveau groupe
-                await loadGroups(newGroup._id); 
-                
-                // Forcer la mise à jour visuelle après un court délai (laisse le DOM se remplir)
-                setTimeout(() => {
-                    updateVisualHeader();
-                    if (typeof refreshParamsLists === 'function') refreshParamsLists();
-                    // Ouvre l'accordéon des groupes pour montrer le succès
-                    const checkG = document.getElementById('check-g');
-                    if (checkG) checkG.checked = true;
-                }, 500);
-            }
-        } catch (err) {
-            console.error("Erreur Cascade Creation:", err);
-            alert("Erreur lors de la création complète.");
-        }
-    });
+    if (res.ok) {
+        const newGroup = await res.json();
+        // Créer rayon + postit DEFAUT
+        try {
+            const resD = await fetchAuth('/api/devices', { method:'POST', body: JSON.stringify({ name:"DEFAUT", groupId: newGroup._id }) });
+            const newDev = await resD.json();
+            await fetchAuth('/api/postits', { method:'POST', body: JSON.stringify({ name:"DEFAUT", deviceId: newDev._id, pickupDate: new Date().toISOString() }) });
+        } catch(e) { console.warn('création défauts:', e); }
+        await loadGroups(newGroup._id);
+        loadGroupsList();
+        setTimeout(() => { updateVisualHeader(); if (typeof refreshParamsLists==='function') refreshParamsLists(); }, 300);
+    } else {
+        alert('Erreur : ' + await res.text());
+    }
 }
 
 async function uiCreateDevice(e) {
@@ -382,17 +585,27 @@ function renderSettingList(elementId, items, currentId, deleteFnName) {
 }
 
 async function syncSelection(type, id) {
-    const gid = document.getElementById('sel-group').value;
+    const gid = id || currentGroupId || document.getElementById('sel-group')?.value;
 
-    if (type === 'group') {
-        await loadGroupData(id || gid);
-        if (typeof loadMembers === 'function') await loadMembers(id || gid);
+    if (type === 'group' && gid && gid !== currentGroupId) {
+        // Groupe changé : recharger la config
+        currentGroupId = gid;
+        localStorage.setItem('currentGroupId', gid);
+        try {
+            const res = await fetchAuth('/api/groups/' + gid + '/config');
+            if (res.ok) { currentGroupConfig = await res.json(); applyGroupConfig(); }
+        } catch(e) {}
+        await loadGroupData(gid);
+        if (typeof loadMembers === 'function') await loadMembers(gid);
+    } else if (type === 'group') {
+        await loadGroupData(gid);
     } else if (type === 'dev') {
         await loadGroupData(gid);
     }
 
     updateVisualHeader();
-    if (socket && gid) socket.emit('get-history', { groupId: gid });
+    const pid = document.getElementById('sel-pos')?.value;
+    if (socket && gid) socket.emit('get-history', { groupId: gid, postitId: pid || undefined });
     if (typeof updateBadge === 'function') updateBadge();
     if (typeof refreshParamsLists === 'function') refreshParamsLists();
 }
@@ -457,7 +670,7 @@ async function resetDateFilter() {
     const dateInput = document.getElementById('filter-date');
     if (dateInput) {
         dateInput.value = ""; // Efface le filtre date
-        const currentGroup = document.getElementById('sel-group').value;
+        const currentGroup = currentGroupId || document.getElementById('sel-group')?.value;
         if (currentGroup) {
             // 1. Recharge la liste des clients sans filtre
             await loadGroupData(currentGroup);
@@ -478,14 +691,17 @@ async function loadGroups(idToSelect = null) {
 
         if (sel && groups.length > 0) {
             sel.innerHTML = groups.map(g => `<option value="${g._id}">${g.name}</option>`).join('');
-            const targetId = idToSelect || sel.value || groups[0]._id;
+            const targetId = idToSelect || currentGroupId || sel.value || groups[0]._id;
             sel.value = targetId;
+            if (!currentGroupId) { currentGroupId = targetId; localStorage.setItem('currentGroupId', targetId); }
 
             // --- VÉRIFICATION / CRÉATION RAYON PAR DÉFAUT ---
             const resDev = await fetchAuth(`/api/devices?groupId=${targetId}`);
             let devs = await resDev.json();
 
-            if (devs.length === 0) {
+            // Création auto uniquement si proprio (pas pour les membres)
+            const isOwner = !currentGroupConfig || currentGroupConfig.myRole === 'owner';
+            if (devs.length === 0 && isOwner) {
                 console.log("🛠️ Création du rayon DEFAUT automatique...");
                 const resNewDev = await fetchAuth('/api/devices', {
                     method: 'POST',
@@ -494,13 +710,18 @@ async function loadGroups(idToSelect = null) {
                 const newDev = await resNewDev.json();
                 devs = [newDev];
             }
+            if (devs.length === 0) {
+                // Membre sans device visible → on continue sans créer
+                await loadGroupData(targetId);
+                return;
+            }
 
             // --- VÉRIFICATION / CRÉATION POST-IT PAR DÉFAUT ---
             const firstDevId = devs[0]._id;
             const resPos = await fetchAuth(`/api/postits?deviceId=${firstDevId}`);
             let postits = await resPos.json();
 
-            if (postits.length === 0) {
+            if (postits.length === 0 && isOwner) {
                 console.log("🛠️ Création du post-it DEFAUT automatique...");
                 await fetchAuth('/api/postits', {
                     method: 'POST',
@@ -544,6 +765,7 @@ async function loadGroupData(groupId) {
         updateVisualHeader();
         return;
     }
+    if (groupId !== currentGroupId) { currentGroupId = groupId; localStorage.setItem('currentGroupId', groupId); }
 
     try {
         // 1. Charger les rayons
@@ -584,20 +806,24 @@ async function loadGroupData(groupId) {
 
             postits.sort((a, b) => new Date(a.pickupDate) - new Date(b.pickupDate));
 
-            // --- CRÉATION POST-IT PAR DÉFAUT si aucun ---
+            // --- CRÉATION POST-IT PAR DÉFAUT si aucun (proprio/admin uniquement) ---
             if (!postits || postits.length === 0) {
-                console.log("🛠️ Création post-it DEFAUT automatique pour rayon", selDev.value);
-                await fetchAuth('/api/postits', {
-                    method: 'POST',
-                    body: JSON.stringify({ 
-                        name: "DEFAUT", 
-                        deviceId: selDev.value, 
-                        pickupDate: new Date().toISOString()
-                    })
-                });
-                // Recharge après création
-                const resPos2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
-                postits = await resPos2.json();
+                const canCreate = !currentGroupConfig || 
+                    currentGroupConfig.myRole === 'owner' || 
+                    currentGroupConfig.myRole === 'admin';
+                if (canCreate) {
+                    console.log("🛠️ Création post-it DEFAUT automatique pour rayon", selDev.value);
+                    await fetchAuth('/api/postits', {
+                        method: 'POST',
+                        body: JSON.stringify({ 
+                            name: "DEFAUT", 
+                            deviceId: selDev.value, 
+                            pickupDate: new Date().toISOString()
+                        })
+                    });
+                    const resPos2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
+                    postits = await resPos2.json();
+                }
             }
 
             if (postits && postits.length > 0) {
@@ -616,7 +842,11 @@ async function loadGroupData(groupId) {
         // 3. Mise à jour header et vue après remplissage des selects
         updateVisualHeader();
         if (typeof refreshView === 'function') refreshView();
-        if (typeof socket !== 'undefined' && socket) socket.emit('get-history', { groupId });
+        // Envoyer le postitId si disponible pour filtrer côté serveur
+        const _pid = document.getElementById('sel-pos')?.value;
+        if (typeof socket !== 'undefined' && socket) {
+            socket.emit('get-history', { groupId, postitId: _pid || undefined });
+        }
         if (typeof updateBadge === 'function') updateBadge();
 
     } catch (err) {
@@ -628,21 +858,21 @@ function updateVisualHeader() {
     const selG = document.getElementById('sel-group');
     const selD = document.getElementById('sel-dev');
     const selP = document.getElementById('sel-pos');
-    
-    // On cible les spans à l'intérieur du badge de statut par leur ordre
-    const spans = document.querySelectorAll('#status-badge span');
+    const stGrp = document.getElementById('st-grp');
+    const stDev = document.getElementById('st-dev');
+    const stPos = document.getElementById('st-pos');
 
-    if (spans.length >= 3) {
-        if (selG && selG.selectedIndex !== -1) {
-            spans[0].innerText = selG.options[selG.selectedIndex].text.toUpperCase();
-        }
-        if (selD && selD.selectedIndex !== -1) {
-            spans[1].innerText = selD.options[selD.selectedIndex].text.toUpperCase();
-        }
-        if (selP && selP.selectedIndex !== -1) {
-            spans[2].innerText = selP.options[selP.selectedIndex].text.toUpperCase();
-        }
-    }
+    // Groupe : config chargée > sel-group > currentGroupId stocké
+    const grpName = (currentGroupConfig && currentGroupConfig.name)
+        ? currentGroupConfig.name
+        : (selG && selG.selectedIndex !== -1 && selG.options[selG.selectedIndex].text
+            ? selG.options[selG.selectedIndex].text
+            : '...');
+    if (stGrp) stGrp.innerText = grpName.toUpperCase();
+    const stGrpMini = document.getElementById('st-grp-mini');
+    if (stGrpMini) stGrpMini.innerText = grpName.toUpperCase();
+    if (stDev && selD && selD.selectedIndex !== -1) stDev.innerText = selD.options[selD.selectedIndex].text.toUpperCase();
+    if (stPos && selP && selP.selectedIndex !== -1) stPos.innerText = selP.options[selP.selectedIndex].text.toUpperCase();
 }
 
 // Met à jour l'input date quand on sélectionne un post-it déjà créé
@@ -745,6 +975,15 @@ async function refreshView(forceScrollBottom = false) {
     const pSel = document.getElementById('sel-pos');
     const pid = pSel ? pSel.value : null;
     const chat = document.getElementById('chat-history');
+    // Si le postit a changé, recharger l'historique complet via socket
+    if (pid && pid !== window._lastPostitId) {
+        window._lastPostitId = pid;
+        const gid = currentGroupId;
+        if (typeof socket !== 'undefined' && socket && gid) {
+            socket.emit('get-history', { groupId: gid, postitId: pid });
+            return; // history-data callback appellera refreshView
+        }
+    }
     const einkSmall = document.getElementById('eink-sim');
     const einkFull = document.getElementById('prep-content');
     const prepHeader = document.getElementById('prep-header');
@@ -829,7 +1068,7 @@ async function refreshView(forceScrollBottom = false) {
                             <div class="text-3xl font-black italic leading-none text-red-600">#${p.orderNumber || '---'}</div>
                         </div>
                         
-                        <button onclick="goToPage(1)" class="bg-blue-50 text-blue-600 p-3 border-2 border-blue-200 shadow-[2px_2px_0px_#bfdbfe] flex items-center justify-center active:shadow-none active:translate-x-[1px] active:translate-y-[1px]">
+                        <button onclick="goToPage(PAGE_CHAT)" class="bg-blue-50 text-blue-600 p-3 border-2 border-blue-200 shadow-[2px_2px_0px_#bfdbfe] flex items-center justify-center active:shadow-none active:translate-x-[1px] active:translate-y-[1px]">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 1 1 0 8h-1"/>
                             </svg>
@@ -871,10 +1110,30 @@ async function refreshView(forceScrollBottom = false) {
     if (einkSmall) einkSmall.innerHTML = einkHtml;
     if (einkFull) einkFull.innerHTML = einkHtml;
     if (prepHeader) prepHeader.innerHTML = prepHeaderHtml;
+    // Bandeau commande Pro au-dessus des sélecteurs
+    const orderBanner = document.getElementById('order-banner');
+    const orderBannerContent = document.getElementById('order-banner-content');
+    const dateAlert = document.getElementById('order-date-alert');
+
+    if (orderBanner) {
+        const showBanner = !!(currentGroupConfig && currentGroupConfig.isPro && pid);
+        orderBanner.style.display = showBanner ? '' : 'none';
+        if (showBanner && orderBannerContent && headerHtml) {
+            orderBannerContent.innerHTML = headerHtml;
+        }
+        // Alerte date manquante
+        if (dateAlert) {
+            const hasDate = !!(typeof p !== 'undefined' && p && p.pickupDate);
+            dateAlert.style.display = (showBanner && !hasDate) ? '' : 'none';
+        }
+    }
+
+    const orderInfoEl = document.getElementById('order-info-content');
+    if (orderInfoEl && prepHeaderHtml) orderInfoEl.innerHTML = prepHeaderHtml;
 
     if (chat) {
         const filtered = allMsgs.filter(m => m.postitId === pid);
-        chat.innerHTML = (pid ? headerHtml : "") + [...filtered].reverse().map(m => {
+        chat.innerHTML = [...filtered].reverse().map(m => {
             const isMe = (currentUser && m.senderName === currentUser.name);
             const noteClass = m.isNote ? "opacity-30 italic" : "";
             const bubbleBg = isMe ? "bg-[#18181b] text-white" : "bg-white text-black";
@@ -899,27 +1158,27 @@ async function refreshView(forceScrollBottom = false) {
                      style="position:relative; max-width:75%;
                             word-break:break-word; overflow-wrap:break-word;
                             transform:translateX(0); transition:transform 0.2s ease;"
-                     ontouchstart="handleTouchStart(event,'${m._id}')"
+                     ${isMe ? `ontouchstart="handleTouchStart(event,'${m._id}')"
                      ontouchmove="handleTouchMove(event,'${m._id}')"
-                     ontouchend="handleTouchEnd(event,'${m._id}')">
+                     ontouchend="handleTouchEnd(event,'${m._id}')"` : ''}>
 
-                    <button id="del-${m._id}"
+                    ${isMe ? `<button id="del-${m._id}"
                             ontouchend="event.stopPropagation(); deleteMessage('${m._id}')"
                             style="position:absolute; top:0; bottom:0; right:100%;
                                    width:44px; background:transparent;
                                    border:none; font-size:22px; cursor:pointer;
                                    display:flex; align-items:center; justify-content:center;
                                    opacity:0; pointer-events:none;
-                                   transition:opacity 0.2s;">🗑️</button>
+                                   transition:opacity 0.2s;">🗑️</button>` : ''}
 
-                    <button id="edit-${m._id}"
+                    ${isMe ? `<button id="edit-${m._id}"
                             ontouchend="event.stopPropagation(); editMessage('${m._id}')"
                             style="position:absolute; top:0; bottom:0; left:100%;
                                    width:44px; background:transparent;
                                    border:none; font-size:22px; cursor:pointer;
                                    display:flex; align-items:center; justify-content:center;
                                    opacity:0; pointer-events:none;
-                                   transition:opacity 0.2s;">🖍️</button>
+                                   transition:opacity 0.2s;">🖍️</button>` : ''}
 
                     <div style="display:flex; align-items:flex-start; gap:6px;">
                         <span class="msg-author-tag" style="flex-shrink:0;">${isMe ? 'Moi' : m.senderName}</span>
@@ -1075,7 +1334,7 @@ async function refreshView(forceScrollBottom = false) {
 
     if (chat) {
         const filtered = allMsgs.filter(m => m.postitId === pid);
-        chat.innerHTML = (pid ? headerHtml : "") + [...filtered].reverse().map(m => {
+        chat.innerHTML = [...filtered].reverse().map(m => {
             const isMe = (currentUser && m.senderName === currentUser.name);
             const noteClass = m.isNote ? "opacity-30 italic" : "";
             const bubbleBg = isMe ? "bg-[#18181b] text-white" : "bg-white text-black";
@@ -1181,10 +1440,8 @@ function toggleFilterFinished() {
     }
     
     // 3. Rechargement global pour appliquer le nouveau filtre de statut sans contrainte de date
-    const gid = document.getElementById('sel-group').value;
-    if (gid) {
-        loadGroupData(gid);
-    }
+    const gid = currentGroupId || document.getElementById('sel-group')?.value;
+    if (gid) { loadGroupData(gid); }
 }
 
 async function loadPostits(deviceId) {
@@ -1312,9 +1569,9 @@ function handleSelectStatus(selectElement, pid) {
 }
 
 function send() {
-    const input = document.getElementById('msg-input'), 
-          gid = document.getElementById('sel-group').value, 
-          did = document.getElementById('sel-dev').value, 
+    const input = document.getElementById('msg-input'),
+          gid = currentGroupId || document.getElementById('sel-group')?.value,
+          did = document.getElementById('sel-dev')?.value || '',
           pid = document.getElementById('sel-pos').value;
     if (!input.value || !gid || !pid) return;
     socket.emit('send-message', { groupId: gid, deviceId: did, postitId: pid, content: input.value, senderName: currentUser.name });
@@ -1595,7 +1852,11 @@ function uiCreatePostit(e) {
     document.getElementById('order-num').value = "";
     document.getElementById('order-phone').value = "";
     document.getElementById('order-date').value = "";
-    document.querySelector('#order-modal h2').innerText = "Nouvelle Commande";
+    const isPro = currentGroupConfig && currentGroupConfig.isPro;
+    const proFlds = document.getElementById('order-pro-fields');
+    if (proFlds) proFlds.style.display = isPro ? '' : 'none';
+    const titleEl = document.getElementById('order-modal-title') || document.querySelector('#order-modal h2');
+    if (titleEl) titleEl.innerText = isPro ? "Nouvelle Commande" : "Nouveau Post-it";
     document.getElementById('order-modal').classList.remove('hidden');
 }
 

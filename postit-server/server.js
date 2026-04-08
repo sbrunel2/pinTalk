@@ -428,32 +428,51 @@ app.get('/api/devices/:gid', async (req, res) => {
     res.json(await Device.find({ groupId: req.params.gid }));
 });
 
-// 2. Pour les ARCHIVES : sans ID dans l'URL, utilise le query ?groupName=...
+// 2. Pour les ARCHIVES et le CHAT : filtre par groupId, accessible à tous les membres
 app.get('/api/devices', async (req, res) => {
     try {
-        // 1. On récupère le groupId depuis l'URL (si présent)
-        // 🗑️ On retire 'email' car on va utiliser req.user.email
-        const { groupId } = req.query; 
-        const userEmail = req.user.email; // 🔑 Extrait du Token
-        
-        const query = {};
+        const { groupId, groupName } = req.query;
+        const userEmail = req.user.email;
 
-        // 2. Si un groupId est précisé, on filtre par groupe
+        // Si groupId fourni : vérifier que l'user est bien membre/proprio du groupe
         if (groupId) {
-            query.groupId = groupId;
+            const group = await Group.findById(groupId);
+            if (!group) return res.json([]);
+
+            const isOwner = group.ownerEmail === userEmail;
+            if (!isOwner) {
+                const perm = await Permission.findOne({
+                    groupId: group._id.toString(),
+                    guestEmail: userEmail
+                });
+                if (!perm) return res.json([]); // Pas membre → rien
+            }
+            // Membre ou proprio → retourner tous les devices du groupe
+            const devices = await Device.find({ groupId });
+            console.log(`[GET Devices] ${devices.length} rayons pour groupe ${groupId}`);
+            return res.json(devices);
         }
 
-        // 3. SÉCURITÉ : On ne montre que les rayons appartenant à cet utilisateur
-        // On garde ton $or pour la transition (pour voir les anciens rayons sans propriétaire)
-        query.$or = [
-            { ownerEmail: userEmail },
-            { ownerEmail: { $exists: false } } 
+        // Si groupName (pour archives) ou sans paramètre : 
+        // retourner les devices des groupes dont l'user est proprio ou membre
+        const ownedGroups = await Group.find({ ownerEmail: userEmail });
+        const perms = await Permission.find({ guestEmail: userEmail });
+        const memberGroupIds = perms.map(p => p.groupId);
+        const allGroupIds = [
+            ...ownedGroups.map(g => g._id.toString()),
+            ...memberGroupIds
         ];
 
+        const query = { groupId: { $in: allGroupIds } };
+        if (groupName) {
+            // Pour les archives : trouver le groupe par nom
+            const g = await Group.findOne({ name: groupName, ownerEmail: userEmail });
+            if (g) return res.json(await Device.find({ groupId: g._id.toString() }));
+            return res.json([]);
+        }
+
         const devices = await Device.find(query);
-        
-        console.log(`[GET] ${devices.length} rayons trouvés pour ${userEmail} (Groupe: ${groupId || 'Tous'})`);
-        
+        console.log(`[GET Devices] ${devices.length} rayons pour ${userEmail}`);
         res.json(devices);
     } catch (err) {
         console.error("Erreur récupération rayons :", err);
@@ -496,24 +515,25 @@ app.get('/api/postits', async (req, res) => {
         const group = await Group.findById(device.groupId);
         if (!group) return res.json([]);
 
-        // SCÉNARIO A : Si ce n'est PAS le propriétaire du commerce (Véro)
+        // Règles de visibilité des postits :
+        // - Proprio, Admin, Employé → voient TOUS les postits
+        // - Client (groupe PRO) → voit uniquement ses propres postits
+        // - Participant (groupe PERSO) → voit TOUS les postits
         if (group.ownerEmail !== userEmail) {
-            
-            // On vérifie le SCÉNARIO B : Est-ce un employé (Thierry) ?
-            const perm = await Permission.findOne({ 
-                groupId: group._id, 
-                guestEmail: userEmail, 
-                role: 'employe' 
+            const perm = await Permission.findOne({
+                groupId: group._id.toString(),
+                guestEmail: userEmail
             });
-            
+
             if (!perm) {
-                // SCÉNARIO C : Ce n'est ni le patron, ni un employé -> C'est un client (Mme Michu)
-                // Elle ne voit QUE ses propres post-its (filtrage strict par son email du Token)
+                // Aucune permission : ne voir que ses propres postits
+                query.ownerEmail = userEmail;
+            } else if (group.isPro && perm.role === 'client') {
+                // Groupe PRO + rôle client : ne voir que ses propres postits
                 query.ownerEmail = userEmail;
             }
+            // Admin, employé, participant (perso) → voient tout (pas de filtre ownerEmail)
         }
-        // Note : Si c'est le patron ou l'employé, 'query.ownerEmail' n'est pas ajouté,
-        // donc ils voient TOUS les post-its du rayon.
 
         // 4. Exécution avec ton tri par date
         const postits = await Postit.find(query).sort({ pickupDate: 1 });
@@ -747,10 +767,10 @@ app.get('/api/groups/:id/members', async (req, res) => {
         const group = await Group.findById(groupId);
         if (!group) return res.status(404).send("Groupe introuvable.");
 
-        // Owner ou admin peuvent voir les membres
+        // Owner ou admin peuvent voir et gérer les membres
         const isOwner = group.ownerEmail === userEmail;
         if (!isOwner) {
-            const adminPerm = await Permission.findOne({ groupId, guestEmail: userEmail, role: 'admin' });
+            const adminPerm = await Permission.findOne({ groupId: groupId.toString(), guestEmail: userEmail, role: 'admin' });
             if (!adminPerm) return res.status(403).send("Accès refusé.");
         }
 
@@ -1016,7 +1036,10 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
     socket.on('get-history', async (data) => {
-        const msgs = await Message.find({ groupId: data.groupId }).sort({ date: -1 }).limit(50);
+        // Filtrer par groupId, et par postitId si fourni
+        const filter = { groupId: data.groupId };
+        if (data.postitId) filter.postitId = data.postitId;
+        const msgs = await Message.find(filter).sort({ date: -1 }).limit(100);
         socket.emit('history-data', msgs);
     });
 

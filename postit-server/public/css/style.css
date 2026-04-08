@@ -6,10 +6,13 @@
 html, body { background: var(--bg); overflow: hidden; height: 100%; position: fixed; width: 100%; font-family: sans-serif; }
 
 .fixed-header { 
-    position: absolute; top: 0; left: 0; width: 100%; height: 85px; 
+    position: absolute; top: 0; left: 0; width: 100%; 
     background: var(--bg); z-index: 2000; padding: 10px 15px; border-bottom: 2px solid var(--accent);
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; flex-direction: column; justify-content: center;
+    transition: max-height 0.25s ease;
 }
+.fixed-header.collapsed #header-details { display: none !important; }
+.fixed-header.collapsed { padding-bottom: 10px; }
 
 .fixed-header .flex-col {
     display: flex;
@@ -41,10 +44,12 @@ html, body { background: var(--bg); overflow: hidden; height: 100%; position: fi
     height: 100%; 
     overflow-y: auto; 
     -webkit-overflow-scrolling: touch; 
-    /* Padding-bottom augmenté à 140px pour laisser place à la zone de saisie + menu */
-    padding: 95px 20px 140px 20px !important; 
+    padding: 105px 20px 140px 20px !important; 
     position: relative;
     flex-shrink: 0;
+}
+.fixed-header.collapsed ~ #viewport .page { 
+    padding-top: 60px !important; 
 }
 
 input, select, textarea { 
