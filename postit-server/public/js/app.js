@@ -807,20 +807,10 @@ async function loadGroupData(groupId) {
             if (filterDateEl && filterDateEl.value) url += `&filterDate=${filterDateEl.value}`;
 
             const resPos = await fetchAuth(url);
-            let postits = await resPos.json();
+            let allPostits = await resPos.json();
 
-            if (typeof showFinished !== 'undefined') {
-                if (showFinished) {
-                    postits = postits.filter(p => p.status === "En caisse" || p.status === "Terminé" || p.status === "Annulé");
-                } else {
-                    postits = postits.filter(p => p.status === "En attente" || p.status === "En préparation" || !p.status || p.status === "");
-                }
-            }
-
-            postits.sort((a, b) => new Date(a.pickupDate) - new Date(b.pickupDate));
-
-            // --- CRÉATION POST-IT PAR DÉFAUT si aucun (proprio/admin uniquement) ---
-            if (!postits || postits.length === 0) {
+            // --- CRÉATION POST-IT PAR DÉFAUT si AUCUN postit brut (avant filtre) ---
+            if (!allPostits || allPostits.length === 0) {
                 const canCreate = !currentGroupConfig || 
                     currentGroupConfig.myRole === 'owner' || 
                     currentGroupConfig.myRole === 'admin';
@@ -835,9 +825,21 @@ async function loadGroupData(groupId) {
                         })
                     });
                     const resPos2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
-                    postits = await resPos2.json();
+                    allPostits = await resPos2.json();
                 }
             }
+
+            // Appliquer le filtre de statut APRÈS la vérification de création
+            let postits = [...allPostits];
+            if (typeof showFinished !== 'undefined') {
+                if (showFinished) {
+                    postits = postits.filter(p => p.status === "En caisse" || p.status === "Terminé" || p.status === "Annulé");
+                } else {
+                    postits = postits.filter(p => p.status === "En attente" || p.status === "En préparation" || !p.status || p.status === "");
+                }
+            }
+
+            postits.sort((a, b) => new Date(a.pickupDate) - new Date(b.pickupDate));
 
             if (postits && postits.length > 0) {
                 selPos.innerHTML = postits.map(p => {
@@ -1018,7 +1020,7 @@ async function refreshView(forceScrollBottom = false) {
                 if (p.status === "Terminé") statusBg = "bg-green-600";
                 if (p.status === "Annulé") statusBg = "bg-gray-500";
                 
-                let formattedDate = "--/--/---- --:--";
+                formattedDate = "--/--/---- --:--";
                 if (p.pickupDate) {
                     const d = new Date(p.pickupDate);
                     if (!isNaN(d)) {
@@ -1133,7 +1135,8 @@ async function refreshView(forceScrollBottom = false) {
         // Alerte date manquante : currentStatus est vide si pas de date ou statut "En attente" sans date
         if (dateAlert) {
             // On vérifie formattedDate : si elle contient "?" c'est qu'il n'y a pas de date
-            const noDate = !formattedDate || formattedDate.includes('?') || formattedDate.trim() === '' || formattedDate === 'undefined' || formattedDate.startsWith('--');
+            // noDate = vrai si pas de date réelle (formattedDate vide ou "--")
+            const noDate = !formattedDate || formattedDate === '' || formattedDate.startsWith('--');
             dateAlert.style.display = (showBanner && noDate) ? '' : 'none';
         }
     }
