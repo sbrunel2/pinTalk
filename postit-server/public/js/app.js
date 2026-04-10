@@ -90,9 +90,9 @@ function applyGroupConfig() {
     const canManageMembers = cfg.myRole === 'owner' || cfg.myRole === 'admin';
 
     const els = {
-        'sel-dev-wrap':     cfg.hasRayons,
-        'order-banner':     cfg.isPro,      // bandeau commande seulement si Pro
-        'acc-rayons':       cfg.hasRayons,
+        'sel-dev-wrap':     false,           // masqué — rayon DEFAUT non visible
+        'order-banner':     cfg.isPro,       // bandeau commande seulement si Pro
+        'acc-rayons':       cfg.hasRayons,   // rayons dans params seulement si Pro multi-rayons
         'order-pro-fields': cfg.isPro,
         'acc-membres':      canManageMembers
     };
@@ -184,6 +184,19 @@ function handleTouchMove(e, id) {
     const clamped = Math.max(-44, Math.min(44, diffX));
     el.style.transition = 'none';
     el.style.transform = 'translateX(' + clamped + 'px)';
+    // Afficher progressivement le bouton pendant le glissement
+    const progress = Math.min(Math.abs(clamped) / 44, 1);
+    if (diffX > 8) {
+        const del = document.getElementById('del-' + id);
+        if (del) { del.style.opacity = String(progress); del.style.pointerEvents = progress > 0.5 ? 'auto' : 'none'; }
+        const edit = document.getElementById('edit-' + id);
+        if (edit) { edit.style.opacity = '0'; edit.style.pointerEvents = 'none'; }
+    } else if (diffX < -8) {
+        const edit = document.getElementById('edit-' + id);
+        if (edit) { edit.style.opacity = String(progress); edit.style.pointerEvents = progress > 0.5 ? 'auto' : 'none'; }
+        const del = document.getElementById('del-' + id);
+        if (del) { del.style.opacity = '0'; del.style.pointerEvents = 'none'; }
+    }
 }
 
 function showBtn(id, side) {
@@ -861,18 +874,19 @@ function updateVisualHeader() {
     const stGrp = document.getElementById('st-grp');
     const stDev = document.getElementById('st-dev');
     const stPos = document.getElementById('st-pos');
+    const stGrpMini = document.getElementById('st-grp-mini');
 
-    // Groupe : config chargée > sel-group > currentGroupId stocké
     const grpName = (currentGroupConfig && currentGroupConfig.name)
         ? currentGroupConfig.name
-        : (selG && selG.selectedIndex !== -1 && selG.options[selG.selectedIndex].text
-            ? selG.options[selG.selectedIndex].text
-            : '...');
-    if (stGrp) stGrp.innerText = grpName.toUpperCase();
-    const stGrpMini = document.getElementById('st-grp-mini');
-    if (stGrpMini) stGrpMini.innerText = grpName.toUpperCase();
-    if (stDev && selD && selD.selectedIndex !== -1) stDev.innerText = selD.options[selD.selectedIndex].text.toUpperCase();
-    if (stPos && selP && selP.selectedIndex !== -1) stPos.innerText = selP.options[selP.selectedIndex].text.toUpperCase();
+        : (selG && selG.selectedIndex !== -1 && selG.options[selG.selectedIndex]?.text
+            ? selG.options[selG.selectedIndex].text : '…');
+
+    if (stGrp) stGrp.innerText = grpName;
+    if (stGrpMini) stGrpMini.innerText = grpName;
+    if (stDev && selD && selD.selectedIndex !== -1)
+        stDev.innerText = selD.options[selD.selectedIndex]?.text || '…';
+    if (stPos && selP && selP.selectedIndex !== -1)
+        stPos.innerText = (selP.options[selP.selectedIndex]?.text || '…').substring(0, 20);
 }
 
 // Met à jour l'input date quand on sélectionne un post-it déjà créé
@@ -975,15 +989,7 @@ async function refreshView(forceScrollBottom = false) {
     const pSel = document.getElementById('sel-pos');
     const pid = pSel ? pSel.value : null;
     const chat = document.getElementById('chat-history');
-    // Si le postit a changé, recharger l'historique complet via socket
-    if (pid && pid !== window._lastPostitId) {
-        window._lastPostitId = pid;
-        const gid = currentGroupId;
-        if (typeof socket !== 'undefined' && socket && gid) {
-            socket.emit('get-history', { groupId: gid, postitId: pid });
-            return; // history-data callback appellera refreshView
-        }
-    }
+    // (pas de guard ici - refreshView affiche ce qui est dans allMsgs)
     const einkSmall = document.getElementById('eink-sim');
     const einkFull = document.getElementById('prep-content');
     const prepHeader = document.getElementById('prep-header');
@@ -995,12 +1001,15 @@ async function refreshView(forceScrollBottom = false) {
 
     let headerHtml = "";
     let prepHeaderHtml = "";
-    let currentStatus = ""; 
+    let currentStatus = "";
+    let formattedDate = "";
 
     if (pid && pid !== "") {
         try {
             const res = await fetchAuth(`/api/postits/details/${pid}`);
+            if (!res || !res.ok) throw new Error("postit non chargé");
             const p = await res.json();
+            if (!p) throw new Error("postit null");
             if (p) {
                 currentStatus = p.status;
                 let statusBg = "bg-black"; 
@@ -1121,10 +1130,11 @@ async function refreshView(forceScrollBottom = false) {
         if (showBanner && orderBannerContent && headerHtml) {
             orderBannerContent.innerHTML = headerHtml;
         }
-        // Alerte date manquante
+        // Alerte date manquante : currentStatus est vide si pas de date ou statut "En attente" sans date
         if (dateAlert) {
-            const hasDate = !!(typeof p !== 'undefined' && p && p.pickupDate);
-            dateAlert.style.display = (showBanner && !hasDate) ? '' : 'none';
+            // On vérifie formattedDate : si elle contient "?" c'est qu'il n'y a pas de date
+            const noDate = !formattedDate || formattedDate.includes('?') || formattedDate.trim() === '' || formattedDate === 'undefined' || formattedDate.startsWith('--');
+            dateAlert.style.display = (showBanner && noDate) ? '' : 'none';
         }
     }
 
@@ -1184,7 +1194,9 @@ async function refreshView(forceScrollBottom = false) {
                         <span class="msg-author-tag" style="flex-shrink:0;">${isMe ? 'Moi' : m.senderName}</span>
                         ${contentHtml}
                         <button ontouchend="event.stopPropagation(); toggleNote('${m._id}')"
-                                style="flex-shrink:0; font-size:14px; background:none; border:none; cursor:pointer;">
+                                onclick="event.stopPropagation(); toggleNote('${m._id}')"
+                                style="flex-shrink:0; font-size:16px; background:none; border:none; cursor:pointer;
+                                       padding:4px 6px; margin:-4px -2px; touch-action:manipulation;">
                             ${m.isNote ? '🚫' : '👁️'}</button>
                     </div>
                 </div>

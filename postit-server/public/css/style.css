@@ -122,17 +122,22 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 .btn-plus-3d:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0px #000; }
 
 #eink-sim {
-    height: 100px;
+    height: 90px;
     background: white;
     border: 4px solid #000;
     padding: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 0;
     font-family: monospace;
     overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
     flex-shrink: 0;
     font-size: 11px;
     position: relative;
     z-index: 1;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
 }
 .btn-black { background: var(--accent); color: white; font-weight: 900; text-transform: uppercase; border: none; cursor: pointer; }
 
@@ -152,7 +157,16 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 
 /* msg-row/msg-bubble rules consolidated above */
 
-#eink-sim, #prep-content { display: flex; flex-direction: column; padding: 10px; background: #fff; min-height: 50px; }
+#prep-content { display: flex; flex-direction: column; padding: 10px; background: #fff; min-height: 50px; }
+#eink-sim { display: block !important; }
+
+/* Quand eink-sim est dans un accordéon, forcer la hauteur et le scroll */
+#acc-eink .acc-content #eink-sim,
+.acc-content #eink-sim { 
+    height: 90px !important; 
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+}
 
 /* Page Prep : contrainte de hauteur pour scroll vertical correct */
 #p4 { overflow: hidden !important; display: flex; flex-direction: column; }
@@ -165,8 +179,10 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
     word-break: break-word; 
     overflow-wrap: break-word;
     white-space: normal;
-    padding-bottom: 80px !important;
+    padding-bottom: 140px !important;
+    margin-bottom: 0;
 }
+#p4 { padding-bottom: 0 !important; }
 #eink-sim input[type="checkbox"], #prep-content input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; }
 
 .hidden { display: none !important; }

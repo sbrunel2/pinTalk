@@ -1,0 +1,169 @@
+═══════════════════════════════════════════════════════════════════════
+     e-POSTIT PRO — DOCUMENT DE REPRISE DU DÉVELOPPEMENT
+     À fournir avec les fichiers sources lors d'une nouvelle session
+═══════════════════════════════════════════════════════════════════════
+
+── STACK TECHNIQUE ────────────────────────────────────────────────────
+Backend  : Node.js / Express / MongoDB Atlas / Socket.io / JWT / Cloudinary
+Frontend : HTML/CSS/JS mobile-first + Tailwind CDN (pas de framework)
+Déploiement : Oracle Cloud, port 3000
+Fichiers : server.js, app.js, index.html, navigation.js, archives.js,
+           auth.js, style.css (dans public/js/ et public/css/)
+
+── ARCHITECTURE NAVIGATION (4 onglets + 1 page hors nav) ──────────────
+PAGE_ARCHIVES = 0  → Archives (p0)
+PAGE_PARAMS   = 1  → Paramètres + Membres fusionnés (p1)
+PAGE_GROUPES  = 2  → Liste des groupes cliquable (p2) ← page par défaut
+PAGE_CHAT     = 3  → Chat simplifié (p3)
+PAGE_PREP     = 4  → Eink agrandi, accessible via bouton, PAS dans la nav
+
+Navigation par swipe (threshold 60px) sauf depuis/vers PAGE_PREP.
+Dernière page persistée en localStorage('lastPage').
+
+── MODÈLES MONGODB ─────────────────────────────────────────────────────
+User       : { email, password, name }
+Group      : { name, ownerEmail, joinCode, type('perso'|'pro'), isPro,
+               isDefault, siret, phonePro, emailPro, stripeSubscriptionId,
+               subscriptionStatus, logoUrl }
+Permission : { groupId(String), guestEmail, role('admin'|'employe'|'client') }
+Device     : { groupId, name, mac, ownerEmail }
+Postit     : { deviceId, ownerEmail, name, orderNumber, phone, pickupDate,
+               status, isLocked, imageUrl }
+Message    : { groupId, deviceId, postitId, content, senderName, isNote,
+               checked, date, type('text'|'image') }
+Archive    : { groupName, deviceName, postitName, content[], archivedAt, adminId }
+
+── VARIABLES GLOBALES CLÉ (app.js) ────────────────────────────────────
+currentGroupId     : ID du groupe actif (persisté localStorage)
+currentGroupConfig : { type, isPro, hasRayons, myRole, name } — chargé via /api/groups/:id/config
+currentUser        : objet user depuis localStorage('user')
+allMsgs            : tableau des messages du postit courant
+socket             : instance Socket.io
+headerCollapsed    : boolean (persisté localStorage)
+
+── ROUTES SERVEUR PRINCIPALES ─────────────────────────────────────────
+POST /api/register         → crée user + groupe perso + rayon DEFAUT + postit DEFAUT
+POST /api/login            → retourne JWT token
+GET  /api/groups           → groupes dont on est proprio
+GET  /api/groups/mine      → tous groupes accessibles (proprio + membre) avec myRole
+GET  /api/groups/:id/config → config groupe (type, isPro, hasRayons, myRole, joinCode)
+POST /api/groups           → créer groupe (body: name, type, siret, phonePro, emailPro)
+PUT  /api/groups/:id       → modifier groupe
+DELETE /api/groups/:id     → supprimer groupe + devices
+GET  /api/groups/:id/members     → membres (owner/admin seulement)
+POST /api/groups/:id/members     → inviter membre (body: email, role)
+PUT  /api/groups/:id/members/:email  → changer rôle
+DELETE /api/groups/:id/members/:email → retirer membre
+POST /api/groups/join      → rejoindre via joinCode
+GET  /api/devices?groupId=X  → rayons du groupe (accessible à tous les membres)
+POST /api/devices          → créer rayon
+GET  /api/postits?deviceId=X → postits du rayon (filtrage selon rôle)
+POST /api/postits          → créer postit (limite 5 pour groupes perso)
+PUT  /api/postits/:id      → modifier postit
+DELETE /api/postits/:id    → supprimer postit
+POST /api/upload           → upload image Cloudinary
+Socket 'get-history'       → { groupId, postitId? } → retourne messages filtrés
+Socket 'send-message'      → envoie message
+Socket 'toggle-message-note', 'toggle-check-line', 'update-postit-status'
+
+── LOGIQUE DROITS D'ACCÈS ─────────────────────────────────────────────
+Postits visibles :
+  - Proprio / Admin / Employé → TOUS les postits du rayon
+  - Client (groupe PRO) → ses propres postits uniquement
+  - Participant (groupe PERSO) → TOUS les postits (même logique que admin)
+
+Devices : appartiennent au GROUPE, pas à l'utilisateur.
+  GET /api/devices?groupId=X vérifie que l'user est membre/proprio.
+
+Membres : seuls proprio et admin peuvent voir/gérer la liste.
+  L'accordéon Membres dans Params est masqué pour les simples participants.
+
+Création auto DEFAUT : rayon + postit DEFAUT créés à l'inscription ET
+  lors de la création d'un groupe par le proprio (pas les membres).
+
+── INTERFACE CHAT (p3) ─────────────────────────────────────────────────
+Structure de haut en bas :
+  1. [sel-dev-wrap] sélecteur rayon — MASQUÉ par défaut (display:none)
+  2. [order-banner] bandeau infos commande — visible seulement si PRO
+       - [order-date-alert] alerte rouge si pas de date de retrait
+       - accordéon avec N°commande, statut, client, date
+  3. Ligne : bouton ✕ date | input date | sélecteur postit | bouton filtre €
+  4. [acc-eink] accordéon "Résumé commande" avec mini eink-sim
+  5. [chat-history] historique des messages
+
+Bulles :
+  - .msg-row.me → droite (fond noir), .msg-row.others → gauche (fond blanc)
+  - Boutons 🗑️ et 🖍️ en position:absolute dans la bulle, opacity:0 au repos
+  - Swipe droite → 🗑️ apparaît progressivement, swipe gauche → 🖍️
+  - UNIQUEMENT sur les bulles isMe (pas les bulles des autres)
+  - Bouton 👁️/🚫 pour basculer isNote (visible dans eink ou non)
+
+── HEADER ──────────────────────────────────────────────────────────────
+Header réductible (clic pour replier). Structure :
+  - Ligne visible : [titre page] [GRP/DEV/POS en petit] [bouton ⏏]
+  - Ligne masquable (#header-details) : nom utilisateur connecté
+Classe CSS .collapsed masque #header-details.
+Persisté en localStorage('headerCollapsed').
+
+── FONCTIONS JS IMPORTANTES ────────────────────────────────────────────
+loadGroupsList()    : charge /api/groups/mine, affiche liste avec badges PRO/PERSO
+selectGroup(id)     : sélectionne groupe, charge config, adapte UI, va sur Chat
+applyGroupConfig()  : adapte UI selon currentGroupConfig (order-banner, acc-rayons, etc.)
+loadGroupData(id)   : charge rayons + postits + lance socket get-history
+refreshView()       : re-render le chat depuis allMsgs (filtre par sel-pos.value)
+updateVisualHeader(): met à jour st-grp, st-dev, st-pos dans le header
+uiCreateGroup()     : modal avec case Pro + champs conditionnels (SIRET, tel, email, logo)
+uiInviteMember()    : modal avec select rôle adapté pro/perso
+submitInvite(gid)   : POST /api/groups/:id/members
+loadMembers(gid)    : charge et affiche membres avec bouton ✕ supprimer
+removeMember()      : DELETE /api/groups/:id/members/:email
+fetchAuth(url,opts) : fetch avec header Authorization Bearer token
+toggleHeader()      : replier/déplier header
+applyHeaderState()  : appliquer état replié/déployé
+setUserDisplay()    : affiche nom user dans #user-name-display
+
+── CE QUI FONCTIONNE ───────────────────────────────────────────────────
+✅ Auth (login / register) avec création groupe/rayon/postit auto
+✅ Liste des groupes (PRO/PERSO, rôle, clic → chat)
+✅ Navigation 4 onglets + swipe
+✅ Chat : envoi/réception messages temps réel (Socket.io)
+✅ Partage des conversations entre membres du même groupe
+✅ Boutons suppr/edit seulement sur ses propres messages
+✅ Swipe progressif sur les bulles
+✅ Basculer isNote (👁️/🚫)
+✅ Édition inline de message
+✅ Accordéon eink dans le chat
+✅ Bandeau commande Pro (accordéon, alerte date)
+✅ Création groupe avec formulaire Pro/Perso
+✅ Invitation membres avec select rôle adapté
+✅ Header réductible avec GRP/DEV/POS
+✅ Nom utilisateur dans le header
+
+── CE QUI RESTE À FAIRE (MORCEAUX 4 ET 5) ─────────────────────────────
+MORCEAU 4 — Stripe (abonnement Pro 10€/mois) :
+  - Afficher les plans gratuit vs pro dans l'UI
+  - Stripe Checkout pour souscrire à un groupe pro
+  - Webhook Stripe pour mettre à jour subscriptionStatus
+  - Champs dans Group : stripeSubscriptionId, subscriptionStatus
+
+MORCEAU 5 — Notifications push :
+  - Service Worker (public/sw.js)
+  - API Push Notifications navigateur (demande permission)
+  - Clés VAPID côté serveur (web-push npm)
+  - Notification quand nouveau message reçu sur un postit
+  - Badge sur l'icône app (PWA manifest.json)
+  - Compteur messages non lus par groupe
+
+── POINTS DE DÉBOGAGE CONNUS ───────────────────────────────────────────
+- eink-sim scroll : #eink-sim { display:block !important } nécessaire
+  car une règle "#eink-sim, #prep-content { display:flex }" existe dans style.css
+- prep-content : padding-bottom:140px pour ne pas être masqué par la tab-bar
+- sel-dev-wrap : toujours display:none (rayon DEFAUT non visible en UI)
+- fetchAuth avec token null → "jwt malformed" : fetchAuth retourne 401 sans appeler le serveur
+- archives.js utilise fetchWithToken() local (pas fetchAuth) car chargé après app.js
+  mais les deux ont accès à localStorage
+
+── FICHIERS À FOURNIR POUR REPRENDRE ───────────────────────────────────
+Tous ces fichiers dans leur version la plus récente :
+  server.js    navigation.js    app.js
+  index.html   style.css        archives.js    auth.js
