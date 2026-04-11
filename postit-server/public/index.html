@@ -130,6 +130,53 @@
             </div>
             <div class="acc-content"><div id="list-members"></div></div>
         </div>
+        <!-- Skin / Apparence -->
+        <div class="acc-item">
+            <input type="checkbox" id="check-skin" class="acc-trigger">
+            <div class="acc-header">
+                <label for="check-skin" class="acc-label-text">🎨 Apparence</label>
+                <label for="check-skin" class="acc-toggle-icon"></label>
+            </div>
+            <div class="acc-content">
+                <!-- Sélecteur 3 thèmes -->
+                <div id="skin-selector" style="display:flex;gap:6px;margin-bottom:12px;">
+                    <button class="skin-btn active" onclick="applySkin(0)">Défaut</button>
+                    <button class="skin-btn" onclick="applySkin(1)">Ardoise</button>
+                    <button class="skin-btn" onclick="applySkin(2)">Perso</button>
+                </div>
+
+                <!-- Pickers couleurs personnalisées -->
+                <div id="skin-color-pickers" style="display:none;">
+                    <div style="font-size:8px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:8px;">Couleurs personnalisées</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <label style="display:flex;flex-direction:column;gap:3px;font-size:9px;font-weight:900;text-transform:uppercase;">
+                            Fond
+                            <input type="color" id="c-bg" value="#efeee9" oninput="applyCustomColors()" style="width:100%;height:28px;border:2px solid #18181b;padding:0;cursor:pointer;">
+                        </label>
+                        <label style="display:flex;flex-direction:column;gap:3px;font-size:9px;font-weight:900;text-transform:uppercase;">
+                            Accent / Bordures
+                            <input type="color" id="c-accent" value="#18181b" oninput="applyCustomColors()" style="width:100%;height:28px;border:2px solid #18181b;padding:0;cursor:pointer;">
+                        </label>
+                        <label style="display:flex;flex-direction:column;gap:3px;font-size:9px;font-weight:900;text-transform:uppercase;">
+                            Texte
+                            <input type="color" id="c-text" value="#18181b" oninput="applyCustomColors()" style="width:100%;height:28px;border:2px solid #18181b;padding:0;cursor:pointer;">
+                        </label>
+                        <label style="display:flex;flex-direction:column;gap:3px;font-size:9px;font-weight:900;text-transform:uppercase;">
+                            Champs / Selects
+                            <input type="color" id="c-field" value="#ffffff" oninput="applyCustomColors()" style="width:100%;height:28px;border:2px solid #18181b;padding:0;cursor:pointer;">
+                        </label>
+                        <label style="display:flex;flex-direction:column;gap:3px;font-size:9px;font-weight:900;text-transform:uppercase;">
+                            Boutons fond
+                            <input type="color" id="c-btn-bg" value="#18181b" oninput="applyCustomColors()" style="width:100%;height:28px;border:2px solid #18181b;padding:0;cursor:pointer;">
+                        </label>
+                        <label style="display:flex;flex-direction:column;gap:3px;font-size:9px;font-weight:900;text-transform:uppercase;">
+                            Boutons texte
+                            <input type="color" id="c-btn-text" value="#ffffff" oninput="applyCustomColors()" style="width:100%;height:28px;border:2px solid #18181b;padding:0;cursor:pointer;">
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- P2 : LISTE DES GROUPES -->
@@ -140,28 +187,24 @@
     </div>
 
     <!-- P3 : CHAT -->
-    <div class="page px-3 pt-24" id="p3"
+    <div class="page px-0 pt-24" id="p3"
          style="display:flex; flex-direction:column; overflow:hidden; padding-bottom:130px !important;">
 
-        <!-- Sélecteur rayon (masqué si groupe perso) -->
-        <div id="sel-dev-wrap" style="display:none; margin-bottom:4px;">
-            <select id="sel-dev" onchange="syncSelection('dev', this.value)"
-                    class="w-full border-2 border-black font-bold text-[10px] uppercase bg-white"
-                    style="height:36px; padding:0 8px;">
-                <option value="">-- Rayon --</option>
-            </select>
+        <!-- ── RANGÉE DE TUILES POSTITS ────────────────────────────── -->
+        <div id="postit-tabs-wrap" style="flex-shrink:0; background:var(--bg); border-bottom:2px solid var(--accent); padding:6px 8px;">
+            <div id="postit-tabs" style="display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px;"></div>
         </div>
 
-        <!-- Bandeau commande Pro (accordéon, masqué si perso ou pas de postit) -->
-        <div id="order-banner" style="display:none; flex-shrink:0; margin-bottom:4px;">
-            <!-- Alerte date manquante -->
-            <div id="order-date-alert" style="display:none; background:#dc2626; color:white; padding:6px 10px; font-size:10px; font-weight:900; text-transform:uppercase; margin-bottom:4px;">
-                ⚠️ Aucune date de retrait — commande non préparable
-            </div>
-            <!-- Contenu commande (accordéon) -->
-            <div class="acc-item" style="border:2px solid #18181b; margin-bottom:0;">
+        <!-- Alerte date manquante (Pro uniquement) -->
+        <div id="order-date-alert" style="display:none; background:#dc2626; color:white; padding:5px 10px; font-size:9px; font-weight:900; text-transform:uppercase; flex-shrink:0;">
+            ⚠️ Aucune date de retrait — commande non préparable
+        </div>
+
+        <!-- Bandeau infos commande Pro (accordéon) -->
+        <div id="order-banner" style="display:none; flex-shrink:0; padding:0 8px; margin-top:4px;">
+            <div class="acc-item" style="border:2px solid var(--accent);">
                 <input type="checkbox" id="check-order-banner" class="acc-trigger">
-                <div class="acc-header" style="padding:5px 8px; background:white;">
+                <div class="acc-header" style="padding:4px 8px; background:white;">
                     <label for="check-order-banner" class="acc-label-text" style="font-size:0.65rem;">📦 Infos commande</label>
                     <label for="check-order-banner" class="acc-toggle-icon"></label>
                 </div>
@@ -169,49 +212,30 @@
             </div>
         </div>
 
-        <!-- Ligne : reset date / filtre date / sélecteur post-it / filtre archive -->
-        <div class="flex gap-1 mb-1 items-stretch" style="height:36px;">
-            <button onclick="resetDateFilter()"
-                    class="flex-none flex items-center justify-center border-2 border-black bg-white text-red-600 font-black px-2">✕</button>
-            <input type="date" id="filter-date"
-                   onchange="loadGroupData(currentGroupId)"
-                   class="border-2 border-black font-black text-[9px] uppercase bg-yellow-50 outline-none"
-                   style="width:33%;">
-            <select id="sel-pos" onchange="updateFilterDateFromPostit(); refreshView();"
-                    class="flex-1 border-2 border-black font-bold text-[10px] uppercase bg-white outline-none"></select>
-            <button id="btn-filter-finished" onclick="toggleFilterFinished()"
-                    class="flex-none border-2 border-black bg-white flex items-center justify-center shadow-[2px_2px_0px_#000]"
-                    style="width:40px; position:relative;">
-                <div id="filter-icon" style="opacity:0.3; display:flex; align-items:center; justify-content:center; position:relative;">
-                    <span style="font-size:18px;">💾</span>
-                    <span style="font-size:10px; font-weight:900; position:absolute; bottom:-4px; right:-5px;
-                                 background:white; border:2px solid black; padding:0 2px; line-height:1;">€</span>
-                </div>
-            </button>
-        </div>
-
-        <!-- Mini écran eink (accordéon) -->
-        <div class="acc-item mb-1" id="acc-eink" style="flex-shrink:0; border-bottom:none;">
+        <!-- Mini eink (accordéon) -->
+        <div class="acc-item" id="acc-eink" style="flex-shrink:0; border-bottom:none; padding:0 8px;">
             <input type="checkbox" id="check-eink" class="acc-trigger">
-            <div class="acc-header" style="padding:4px 0;">
-                <label for="check-eink" class="acc-label-text" style="font-size:0.65rem;">📋 Résumé commande</label>
-                <div style="display:flex; align-items:center; gap:6px;">
+            <div class="acc-header" style="padding:3px 0;">
+                <label for="check-eink" class="acc-label-text" style="font-size:0.6rem;">📋 Résumé</label>
+                <div style="display:flex; align-items:center; gap:4px;">
                     <button onclick="goToPage(4); event.stopPropagation();"
-                            style="background:#eff6ff; color:#2563eb; padding:4px 6px; border:1px solid #bfdbfe; font-size:11px; cursor:pointer;">⤢</button>
+                            style="background:#eff6ff; color:#2563eb; padding:3px 5px; border:1px solid #bfdbfe; font-size:10px; cursor:pointer;">⤢</button>
                     <label for="check-eink" class="acc-toggle-icon" style="width:auto;"></label>
                 </div>
             </div>
             <div class="acc-content" style="padding-bottom:4px;">
-                <div style="position:relative;">
-                    <div id="eink-sim"
-                         class="border-4 border-black bg-white p-2 font-mono text-[10px]"
-                         style="height:90px; overflow:hidden; word-break:break-word; overflow-wrap:break-word;"></div>
-                </div>
+                <div id="eink-sim" class="border-4 border-black bg-white font-mono text-[10px]"
+                     style="height:80px; overflow-y:auto; word-break:break-word; overflow-wrap:break-word; padding:6px;"></div>
             </div>
         </div>
 
         <!-- Historique messages -->
-        <div id="chat-history"></div>
+        <div id="chat-history" style="padding:0 8px;"></div>
+
+        <!-- Sélects cachés (compatibilité JS) -->
+        <select id="sel-dev" style="display:none;"></select>
+        <select id="sel-pos" style="display:none;"></select>
+        <input type="date" id="filter-date" style="display:none;">
     </div>
 
     <!-- P4 : PREP (eink agrandi) -->

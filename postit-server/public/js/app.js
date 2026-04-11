@@ -32,56 +32,224 @@ function setUserDisplay() {
     if (el && user.name) el.innerText = user.name + (user.email ? ' (' + user.email + ')' : '');
 }
 
+// ─── SKINS ───────────────────────────────────────────────────────────────────
+function applySkin(n) {
+    document.body.classList.remove('skin-1','skin-2');
+    if (n === 1) document.body.classList.add('skin-1');
+    if (n === 2) document.body.classList.add('skin-2');
+    localStorage.setItem('activeSkin', n);
+    // Mettre à jour les boutons dans le sélecteur
+    document.querySelectorAll('.skin-btn').forEach((b,i) => {
+        b.classList.toggle('active', i === n);
+    });
+    const pickers = document.getElementById('skin-color-pickers');
+    if (pickers) pickers.classList.toggle('visible', n === 2);
+}
+
+function applyCustomColors() {
+    const vars = {
+        '--custom-bg':       document.getElementById('c-bg')?.value       || '#efeee9',
+        '--custom-accent':   document.getElementById('c-accent')?.value   || '#18181b',
+        '--custom-text':     document.getElementById('c-text')?.value     || '#18181b',
+        '--custom-field':    document.getElementById('c-field')?.value    || '#ffffff',
+        '--custom-btn-bg':   document.getElementById('c-btn-bg')?.value   || '#18181b',
+        '--custom-btn-text': document.getElementById('c-btn-text')?.value || '#ffffff',
+    };
+    Object.entries(vars).forEach(([k,v]) => {
+        document.documentElement.style.setProperty(k, v);
+        localStorage.setItem(k, v);
+    });
+}
+
+function initSkin() {
+    const n = parseInt(localStorage.getItem('activeSkin') || '0');
+    // Restaurer les couleurs perso
+    const defaults = {
+        '--custom-bg':'#efeee9','--custom-accent':'#18181b','--custom-text':'#18181b',
+        '--custom-field':'#ffffff','--custom-btn-bg':'#18181b','--custom-btn-text':'#ffffff'
+    };
+    const pickerMap = {
+        '--custom-bg':'c-bg','--custom-accent':'c-accent','--custom-text':'c-text',
+        '--custom-field':'c-field','--custom-btn-bg':'c-btn-bg','--custom-btn-text':'c-btn-text'
+    };
+    Object.entries(defaults).forEach(([k,def]) => {
+        const val = localStorage.getItem(k) || def;
+        document.documentElement.style.setProperty(k, val);
+        const picker = document.getElementById(pickerMap[k]);
+        if (picker) picker.value = val;
+    });
+    applySkin(n);
+}
+
 if (currentUser) {
     document.getElementById('auth-screen').classList.add('hidden');
     document.addEventListener('DOMContentLoaded', () => setTimeout(initApp, 200));
 }
 
 // ─── GROUPES : liste + sélection ─────────────────────────────────────────────
+// Ordre des groupes persisté
+let groupsOrder = JSON.parse(localStorage.getItem('groupsOrder') || '[]');
+
 async function loadGroupsList() {
     const container = document.getElementById('groups-list-container');
     if (!container) return;
     container.innerHTML = '<p style="text-align:center;opacity:0.3;font-size:11px;margin-top:30px;">Chargement…</p>';
     try {
         const res = await fetchAuth('/api/groups/mine');
-        if (!res.ok) { container.innerHTML = '<p style="text-align:center;opacity:0.4;margin-top:30px;">Erreur chargement.</p>'; return; }
+        if (!res.ok) { container.innerHTML = '<p style="text-align:center;opacity:0.4;margin-top:30px;">Erreur.</p>'; return; }
         const groups = await res.json();
         if (!groups.length) {
             container.innerHTML = '<p style="text-align:center;opacity:0.4;font-size:11px;margin-top:40px;">Aucun groupe.<br>Créez-en un dans Paramètres.</p>';
             return;
         }
-        container.innerHTML = groups.map(g => {
-            const badge = g.isPro
-                ? '<span style="background:#18181b;color:#fff;font-size:8px;font-weight:900;padding:2px 6px;margin-right:6px;">PRO</span>'
-                : '<span style="background:#e5e7eb;color:#6b7280;font-size:8px;font-weight:900;padding:2px 6px;margin-right:6px;">PERSO</span>';
-            const roleMap = {owner:'✦ Propriétaire', admin:'🔑 Admin', employe:'👷 Employé', client:'👤 Membre'};
-            const roleLabel = roleMap[g.myRole] || '';
-            const isActive = g._id === currentGroupId;
-            const bdr = isActive ? 'border-left:4px solid #18181b;background:#fff;box-shadow:2px 2px 0 #000;' : 'border-left:4px solid transparent;background:rgba(255,255,255,0.7);';
-            return `<div onclick="selectGroup('${g._id}')"
-                         style="${bdr}margin-bottom:12px;padding:14px;cursor:pointer;border-bottom:1px solid rgba(0,0,0,0.07);">
-                <div style="display:flex;align-items:center;margin-bottom:3px;">${badge}<span style="font-size:15px;font-weight:900;text-transform:uppercase;">${g.name}</span></div>
-                <div style="font-size:10px;opacity:0.5;font-weight:700;">${roleLabel}</div>
-            </div>`;
-        }).join('');
+        // Trier selon l'ordre mémorisé
+        const ordered = [...groups].sort((a, b) => {
+            const ia = groupsOrder.indexOf(a._id);
+            const ib = groupsOrder.indexOf(b._id);
+            if (ia === -1 && ib === -1) return 0;
+            if (ia === -1) return 1; if (ib === -1) return -1;
+            return ia - ib;
+        });
+
+        container.innerHTML = `<div id="groups-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;">
+            ${ordered.map(g => {
+                const isPro = g.isPro;
+                const isActive = g._id === currentGroupId;
+                const roleMap = {owner:'✦', admin:'🔑', employe:'👷', client:'👤'};
+                const roleIcon = roleMap[g.myRole] || '';
+                const bg = isActive ? 'var(--accent)' : '#fff';
+                const color = isActive ? '#fff' : 'var(--accent)';
+                const shadow = isActive ? '3px 3px 0 var(--accent)' : '3px 3px 0 rgba(0,0,0,0.15)';
+                const border = isActive ? '2px solid var(--accent)' : '2px solid rgba(0,0,0,0.12)';
+                // Logo : logoUrl si disponible (pro OU perso), sinon initiale du nom
+                const logoHtml = g.logoUrl
+                    ? `<img src="${g.logoUrl}" style="width:32px;height:32px;object-fit:cover;border:1px solid rgba(0,0,0,0.1);margin-bottom:4px;">`
+                    : `<div style="width:32px;height:32px;background:rgba(0,0,0,0.07);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-bottom:4px;">${g.name[0].toUpperCase()}</div>`;
+                return `<div
+                    id="tile-${g._id}"
+                    onclick="selectGroup('${g._id}')"
+                    ontouchstart="tileTouch(event,'${g._id}')"
+                    ontouchmove="tileTouchMove(event)"
+                    ontouchend="tileTouchEnd(event,'${g._id}')"
+                    style="background:${bg};color:${color};border:${border};box-shadow:${shadow};
+                           padding:10px 6px;cursor:pointer;display:flex;flex-direction:column;
+                           align-items:center;text-align:center;position:relative;
+                           min-height:90px;justify-content:center;user-select:none;">
+                    ${isPro ? `<span style="position:absolute;top:4px;right:4px;background:${isActive?'rgba(255,255,255,0.2)':'#18181b'};color:${isActive?'#fff':'#fff'};font-size:6px;font-weight:900;padding:1px 3px;line-height:1.4;">PRO</span>
+                    <span style="position:absolute;bottom:4px;right:4px;font-size:12px;opacity:0.5;">🛍️</span>` : ''}
+                    ${logoHtml}
+                    <div style="font-size:9px;font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;">${g.name}</div>
+                    <div style="font-size:8px;opacity:0.5;margin-top:2px;">${roleIcon}</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+
+        // Activer le drag-and-drop tactile après rendu
+        initTileDragTouch();
+
     } catch(err) { console.error('loadGroupsList:', err); }
 }
 
+// ── Drag & drop tactile pour mobile ──────────────────────────────────────────
+let _tileDragId = null, _tileDragEl = null, _tileGhost = null;
+let _tileTouchStartX = 0, _tileTouchStartY = 0, _tileMoved = false;
+
+function tileTouch(e, id) {
+    _tileDragId = id;
+    _tileTouchStartX = e.touches[0].clientX;
+    _tileTouchStartY = e.touches[0].clientY;
+    _tileMoved = false;
+    _tileDragEl = document.getElementById('tile-' + id);
+}
+
+function tileTouchMove(e) {
+    if (!_tileDragEl) return;
+    const dx = Math.abs(e.touches[0].clientX - _tileTouchStartX);
+    const dy = Math.abs(e.touches[0].clientY - _tileTouchStartY);
+    if (dx > 8 || dy > 8) {
+        _tileMoved = true;
+        e.preventDefault();
+        _tileDragEl.style.opacity = '0.5';
+        _tileDragEl.style.transform = 'scale(0.95)';
+        // Trouver la tuile cible sous le doigt
+        const el = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
+        const target = el && el.closest('[id^="tile-"]');
+        document.querySelectorAll('[id^="tile-"]').forEach(t => t.style.outline = '');
+        if (target && target.id !== 'tile-' + _tileDragId) {
+            target.style.outline = '2px solid var(--accent)';
+        }
+    }
+}
+
+function tileTouchEnd(e, id) {
+    if (!_tileDragEl) return;
+    _tileDragEl.style.opacity = '1';
+    _tileDragEl.style.transform = '';
+    document.querySelectorAll('[id^="tile-"]').forEach(t => t.style.outline = '');
+
+    if (_tileMoved) {
+        e.preventDefault();
+        const endEl = document.elementFromPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+        const target = endEl && endEl.closest('[id^="tile-"]');
+        if (target && target.id !== 'tile-' + _tileDragId) {
+            const targetId = target.id.replace('tile-', '');
+            const allTiles = [...document.querySelectorAll('[id^="tile-"]')].map(el => el.id.replace('tile-',''));
+            const fi = allTiles.indexOf(_tileDragId);
+            const ti = allTiles.indexOf(targetId);
+            if (fi !== -1 && ti !== -1) {
+                allTiles.splice(fi, 1);
+                allTiles.splice(ti, 0, _tileDragId);
+                groupsOrder = allTiles;
+                localStorage.setItem('groupsOrder', JSON.stringify(groupsOrder));
+                loadGroupsList();
+            }
+        }
+    }
+    _tileDragId = null; _tileDragEl = null; _tileMoved = false;
+}
+
+function initTileDragTouch() {
+    // Empêcher le scroll pendant le drag tactile sur la grille
+    const grid = document.getElementById('groups-grid');
+    if (grid) grid.style.touchAction = 'none';
+}
+
 async function selectGroup(groupId) {
+    // 1. Mettre à jour la source de vérité IMMÉDIATEMENT
     currentGroupId = groupId;
     localStorage.setItem('currentGroupId', groupId);
-    try {
-        const res = await fetchAuth('/api/groups/' + groupId + '/config');
-        currentGroupConfig = res.ok ? await res.json() : { type:'perso', isPro:false, hasRayons:false };
-    } catch(e) { currentGroupConfig = { type:'perso', isPro:false, hasRayons:false }; }
-    applyGroupConfig();
-    const stGrp = document.getElementById('st-grp');
-    if (stGrp) stGrp.innerText = (currentGroupConfig.name || '...').toUpperCase();
+
+    // 2. Synchroniser le sel-group caché
     const selG = document.getElementById('sel-group');
     if (selG) selG.value = groupId;
+
+    // 3. Charger la config du groupe
+    try {
+        const res = await fetchAuth('/api/groups/' + groupId + '/config');
+        if (res.ok) {
+            currentGroupConfig = await res.json();
+        } else {
+            currentGroupConfig = { type:'perso', isPro:false, hasRayons:false, myRole:'owner', name:'' };
+        }
+    } catch(e) {
+        currentGroupConfig = { type:'perso', isPro:false, hasRayons:false, myRole:'owner', name:'' };
+    }
+
+    // 4. Mettre à jour le header avec le nom du groupe
+    applyGroupConfig();
+    updateVisualHeader();
+    setUserDisplay();
+
+    // 5. Charger les données (devices, postits, historique)
     await loadGroupData(groupId);
-    await loadMembers(groupId);
+
+    // 6. Charger les membres (async, pas bloquant)
+    loadMembers(groupId).catch(() => {});
+
+    // 7. Rafraîchir la liste des groupes pour mettre en évidence le groupe actif
     loadGroupsList();
+
+    // 8. Aller sur le chat
     goToPage(PAGE_CHAT);
 }
 
@@ -357,6 +525,7 @@ async function initApp() {
 	});
     applyHeaderState();
     setUserDisplay();
+    initSkin();
     await loadGroups();
     await refreshParamsLists();
     // Restaurer la config UI du dernier groupe visité
@@ -407,8 +576,11 @@ async function uiCreateGroup(e) {
                 <input type="text"  id="cg-siret"    placeholder="SIRET (optionnel)"   style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
                 <input type="tel"   id="cg-phone"    placeholder="Téléphone"           style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
                 <input type="email" id="cg-email"    placeholder="Email professionnel" style="width:100%;border:2px solid #18181b;padding:8px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
-                <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;margin-top:4px;">Logo (optionnel)</div>
-                <input type="file"  id="cg-logo"     accept="image/*"                  style="width:100%;border:2px solid #18181b;padding:6px;font-size:12px;margin-bottom:6px;display:block;background:white;box-sizing:border-box;">
+            </div>
+
+            <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:10px;margin-bottom:4px;">
+                <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Logo du groupe (optionnel)</div>
+                <input type="file" id="cg-logo" accept="image/*" style="width:100%;border:2px solid #18181b;padding:6px;font-size:12px;margin-bottom:4px;display:block;background:white;box-sizing:border-box;">
             </div>
 
             <div style="display:flex;gap:8px;margin-top:16px;">
@@ -445,7 +617,7 @@ async function submitCreateGroup() {
 
     // Upload logo si présent
     const logoFile = document.getElementById('cg-logo')?.files?.[0];
-    if (logoFile && isPro) {
+    if (logoFile) {
         try {
             const formData = new FormData();
             formData.append('file', logoFile);
@@ -590,8 +762,8 @@ function renderSettingList(elementId, items, currentId, deleteFnName) {
             <div class="flex items-center gap-1">
                 <button onclick="event.stopPropagation(); editName('${type}', '${item._id}', '${(item.name || item.orderNumber || "").replace(/'/g, "\\'")}')" class="btn-edit">🖍️</button>
                 <button 
-                    onclick="event.stopPropagation(); if(this.innerText==='✕'){ this.innerText='OK?'; this.classList.add('text-orange-500'); setTimeout(()=>{ this.innerText='✕'; this.classList.remove('text-orange-500'); }, 2000); } else { ${deleteFnName}('${item._id}'); }" 
-                    class="text-red-500 font-bold px-2 transition-all">✕</button>
+                    onclick="event.stopPropagation(); if(this.dataset.confirm!=='1'){ this.dataset.confirm='1'; this.style.opacity='1'; setTimeout(()=>{ this.dataset.confirm=''; this.style.opacity='0.5'; }, 2000); } else { this.dataset.confirm=''; ${deleteFnName}('${item._id}'); }" 
+                    style="font-size:16px;background:none;border:none;cursor:pointer;opacity:0.5;padding:4px;" title="Supprimer">🗑️</button>
             </div>
         </div>`;
     }).join('');
@@ -626,20 +798,26 @@ async function syncSelection(type, id) {
 async function refreshParamsLists() {
     const user = JSON.parse(localStorage.getItem('user'));
     if (!user || !user.email) return;
-    const emailParam = `email=${encodeURIComponent(user.email)}`;
 
-    let selGroup = document.getElementById('sel-group');
-    // On prend la valeur ACTUELLE du sélecteur
-    let currentGid = (selGroup && selGroup.value) ? selGroup.value : null;
+    // TOUJOURS utiliser currentGroupId comme source de vérité
+    let currentGid = currentGroupId || localStorage.getItem('currentGroupId');
 
-    // 1. On charge les GROUPES (nécessaire pour la liste des réglages)
-	const gRes = await fetchAuth('/api/groups');
-	const groups = await gRes.json();
+    // 1. Charger les GROUPES (proprio + membre)
+    const gRes = await fetchAuth('/api/groups/mine');
+    const groups = await gRes.json();
 
-    // Si on n'a aucune sélection mais qu'on a des groupes, on prend le premier
+    // Synchroniser sel-group (caché) avec currentGroupId
+    const selGroup = document.getElementById('sel-group');
+    if (selGroup) {
+        selGroup.innerHTML = groups.map(g => `<option value="${g._id}">${g.name}</option>`).join('');
+        if (currentGid) selGroup.value = currentGid;
+    }
+
+    // Si toujours pas de groupe, prendre le premier
     if (!currentGid && groups.length > 0) {
         currentGid = groups[0]._id;
-        if (selGroup) selGroup.value = currentGid;
+        currentGroupId = currentGid;
+        localStorage.setItem('currentGroupId', currentGid);
     }
 
     // Affichage de la liste des groupes dans les paramètres
@@ -770,6 +948,325 @@ async function loadGroups(idToSelect = null) {
     } catch (err) { console.error("Erreur loadGroups:", err); }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// TUILES POSTITS — rangée horizontale dans le chat
+// ═══════════════════════════════════════════════════════════════════════
+
+// Postit actuellement sélectionné (id)
+let currentPostitId = null;
+// Cache des postits du groupe courant
+let _cachedPostits = [];
+
+// ── Rendu de la rangée de tuiles ─────────────────────────────────────────────
+function renderPostitTabs(postits, selectedId) {
+    const wrap = document.getElementById('postit-tabs');
+    if (!wrap) return;
+    _cachedPostits = postits || [];
+
+    const cfg = currentGroupConfig || {};
+    const isPro = cfg.isPro;
+    const myRole = cfg.myRole || 'owner';
+    const isOwnerOrAdmin = myRole === 'owner' || myRole === 'admin';
+    const isEmployee = myRole === 'employe';
+    const canCreate = !isEmployee && _cachedPostits.length < (isPro ? 4 : 4);
+
+    const tabs = _cachedPostits.map(p => {
+        const isActive = p._id === selectedId;
+        const bg     = isActive ? 'var(--accent)' : '#fff';
+        const color  = isActive ? '#fff' : 'var(--accent)';
+        const border = isActive ? '2px solid var(--accent)' : '2px solid rgba(0,0,0,0.15)';
+        const shadow = isActive ? '2px 2px 0 rgba(0,0,0,0.3)' : '2px 2px 0 rgba(0,0,0,0.1)';
+
+        // Label de la tuile
+        let label = '';
+        if (isPro) {
+            // Groupes PRO : heure de retrait + nom
+            const d = p.pickupDate ? new Date(p.pickupDate) : null;
+            const time = d ? d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '??:??';
+            label = `<div style="font-size:7px;opacity:0.7;">${time}</div>
+                     <div style="font-size:8px;font-weight:900;text-transform:uppercase;line-height:1.1;word-break:break-word;">${truncate(p.name,10)}</div>`;
+        } else {
+            // Groupes PERSO : nom seulement
+            label = `<div style="font-size:9px;font-weight:900;text-transform:uppercase;line-height:1.1;word-break:break-word;">${truncate(p.name,12)}</div>`;
+        }
+
+        // Roue ⚙️ visible uniquement pour le proprio du postit ou owner/admin
+        const isOwnerOfPostit = (currentUser && p.ownerEmail === currentUser.email) || isOwnerOrAdmin;
+        const gear = isOwnerOfPostit
+            ? `<button onclick="event.stopPropagation(); uiEditPostit('${p._id}')"
+                       style="position:absolute;bottom:2px;right:2px;background:none;border:none;
+                              font-size:10px;cursor:pointer;opacity:${isActive?'0.7':'0.4'};padding:1px;">⚙️</button>`
+            : '';
+
+        return `<div onclick="selectPostit('${p._id}')"
+                     style="flex-shrink:0;width:70px;min-height:56px;position:relative;
+                            background:${bg};color:${color};border:${border};box-shadow:${shadow};
+                            padding:5px 4px 16px 4px;cursor:pointer;display:flex;
+                            flex-direction:column;align-items:center;justify-content:center;text-align:center;">
+                    ${label}
+                    ${gear}
+                </div>`;
+    }).join('');
+
+    // Tuile "+"
+    const addTab = canCreate
+        ? `<div onclick="uiCreatePostit()"
+                style="flex-shrink:0;width:44px;min-height:56px;display:flex;flex-direction:column;
+                       align-items:center;justify-content:center;cursor:pointer;
+                       border:2px dashed rgba(0,0,0,0.2);color:rgba(0,0,0,0.3);">
+                <div style="font-size:22px;font-weight:100;line-height:1;">+</div>
+           </div>`
+        : '';
+
+    wrap.innerHTML = tabs + addTab;
+
+    // Mettre à jour sel-pos caché (compatibilité)
+    const selPos = document.getElementById('sel-pos');
+    if (selPos) {
+        selPos.innerHTML = _cachedPostits.map(p => `<option value="${p._id}">${p.name}</option>`).join('');
+        if (selectedId) selPos.value = selectedId;
+    }
+}
+
+// ── Sélectionner un postit ────────────────────────────────────────────────────
+function selectPostit(postitId) {
+    currentPostitId = postitId;
+    const selPos = document.getElementById('sel-pos');
+    if (selPos) selPos.value = postitId;
+
+    // Re-rendre les tuiles pour mettre en évidence la sélection
+    renderPostitTabs(_cachedPostits, postitId);
+
+    // Charger l'historique et rafraîchir la vue
+    if (socket && currentGroupId) {
+        socket.emit('get-history', { groupId: currentGroupId, postitId });
+    }
+    refreshView();
+}
+
+// ── Créer un nouveau postit ───────────────────────────────────────────────────
+function uiCreatePostit() {
+    const cfg = currentGroupConfig || {};
+    const isPro = cfg.isPro;
+
+    document.getElementById('postit-modal')?.remove();
+
+    const modalHtml = `
+    <div id="postit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
+        <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);padding:20px;width:100%;max-width:380px;margin-top:60px;">
+            <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:14px;">
+                ${isPro ? '📦 Nouvelle commande' : '💬 Nouveau postit'}
+            </h3>
+
+            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">
+                ${isPro ? 'Nom du client *' : 'Nom de la conversation *'}
+            </div>
+            <input type="text" id="pm-name" placeholder="${isPro ? 'Nom du client' : 'Nom'}"
+                   style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;background:white;box-sizing:border-box;">
+
+            ${isPro ? `
+            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Date de retrait *</div>
+            <input type="datetime-local" id="pm-date"
+                   style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;background:white;box-sizing:border-box;">
+
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <div style="flex:1;">
+                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Téléphone</div>
+                    <input type="tel" id="pm-phone" placeholder="06..."
+                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                </div>
+                <div style="flex:1;">
+                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Email</div>
+                    <input type="email" id="pm-email" placeholder="email@..."
+                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                </div>
+            </div>` : ''}
+
+            <div style="display:flex;gap:8px;margin-top:14px;">
+                <button onclick="document.getElementById('postit-modal').remove()"
+                        style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+                <button onclick="submitCreatePostit()"
+                        style="flex:1;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Créer</button>
+            </div>
+        </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    setTimeout(() => document.getElementById('pm-name')?.focus(), 100);
+}
+
+async function submitCreatePostit() {
+    const name = document.getElementById('pm-name')?.value?.trim();
+    if (!name) return alert('Le nom est obligatoire.');
+
+    const selDev = document.getElementById('sel-dev');
+    const deviceId = selDev?.value;
+    if (!deviceId) return alert('Rayon introuvable, rechargez la page.');
+
+    const isPro = currentGroupConfig?.isPro;
+    const pickupDate = isPro
+        ? (document.getElementById('pm-date')?.value || new Date().toISOString())
+        : new Date().toISOString();
+
+    const payload = {
+        name,
+        deviceId,
+        pickupDate,
+        phone: document.getElementById('pm-phone')?.value?.trim() || '',
+        email: document.getElementById('pm-email')?.value?.trim() || '',
+    };
+    if (isPro) {
+        // Générer un numéro de commande automatique
+        payload.orderNumber = 'CMD-' + Math.floor(1000 + Math.random() * 9000);
+    }
+
+    const res = await fetchAuth('/api/postits', { method:'POST', body: JSON.stringify(payload) });
+    document.getElementById('postit-modal')?.remove();
+
+    if (res.ok) {
+        const newP = await res.json();
+        await loadGroupData(currentGroupId);
+        selectPostit(newP._id);
+    } else {
+        alert('Erreur : ' + await res.text());
+    }
+}
+
+// ── Éditer un postit (roue ⚙️) ───────────────────────────────────────────────
+async function uiEditPostit(postitId) {
+    document.getElementById('postit-edit-modal')?.remove();
+    const p = _cachedPostits.find(x => x._id === postitId);
+    if (!p) return;
+
+    const isPro = currentGroupConfig?.isPro;
+    const fmtDate = p.pickupDate ? new Date(p.pickupDate).toISOString().slice(0,16) : '';
+    const isOwnerOrAdmin = ['owner','admin'].includes(currentGroupConfig?.myRole);
+
+    const modalHtml = `
+    <div id="postit-edit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
+        <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);padding:20px;width:100%;max-width:380px;margin-top:60px;">
+            <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:14px;">⚙️ ${isPro ? 'Commande' : 'Postit'}</h3>
+
+            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Nom</div>
+            <input type="text" id="pe-name" value="${p.name||''}"
+                   style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;background:white;box-sizing:border-box;">
+
+            ${isPro ? `
+            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Date de retrait</div>
+            <input type="datetime-local" id="pe-date" value="${fmtDate}"
+                   style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;background:white;box-sizing:border-box;">
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <div style="flex:1;">
+                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Téléphone</div>
+                    <input type="tel" id="pe-phone" value="${p.phone||''}"
+                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                </div>
+                <div style="flex:1;">
+                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">N° commande</div>
+                    <input type="text" id="pe-ordernum" value="${p.orderNumber||''}"
+                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                </div>
+            </div>` : ''}
+
+            <!-- Inviter un participant -->
+            <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:10px;margin-bottom:10px;">
+                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:4px;">Inviter un participant</div>
+                <div style="display:flex;gap:6px;">
+                    <input type="email" id="pe-invite-email" placeholder="email@exemple.fr"
+                           style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                    <button onclick="submitInviteToPostit('${postitId}')"
+                            style="padding:8px 10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">+</button>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:6px;margin-top:14px;flex-wrap:wrap;">
+                <button onclick="document.getElementById('postit-edit-modal').remove()"
+                        style="flex:1;padding:10px;border:2px solid var(--accent);background:white;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+                <button onclick="submitEditPostit('${postitId}')"
+                        style="flex:2;padding:10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">Modifier</button>
+                ${isOwnerOrAdmin ? `<button onclick="confirmDeletePostit('${postitId}')"
+                        style="flex:1;padding:10px;background:#dc2626;color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️</button>` : ''}
+            </div>
+        </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+async function submitEditPostit(postitId) {
+    const name = document.getElementById('pe-name')?.value?.trim();
+    if (!name) return alert('Le nom est obligatoire.');
+
+    const isPro = currentGroupConfig?.isPro;
+    const payload = { name };
+    if (isPro) {
+        const dateVal = document.getElementById('pe-date')?.value;
+        if (dateVal) payload.pickupDate = new Date(dateVal).toISOString();
+        payload.phone = document.getElementById('pe-phone')?.value?.trim() || '';
+        payload.orderNumber = document.getElementById('pe-ordernum')?.value?.trim() || '';
+    }
+
+    const res = await fetchAuth('/api/postits/' + postitId, { method:'PUT', body: JSON.stringify(payload) });
+    document.getElementById('postit-edit-modal')?.remove();
+    if (res.ok) {
+        await loadGroupData(currentGroupId);
+        selectPostit(postitId);
+    } else {
+        alert('Erreur : ' + await res.text());
+    }
+}
+
+async function submitInviteToPostit(postitId) {
+    const email = document.getElementById('pe-invite-email')?.value?.trim();
+    if (!email || !email.includes('@')) return alert('Email invalide.');
+
+    // Inviter dans le groupe comme 'client'
+    const res = await fetchAuth('/api/groups/' + currentGroupId + '/members', {
+        method: 'POST',
+        body: JSON.stringify({ email, role: 'client' })
+    });
+    if (res.ok) {
+        document.getElementById('pe-invite-email').value = '';
+        alert('✅ ' + email + ' invité(e) dans le groupe.');
+    } else {
+        const txt = await res.text();
+        if (txt.includes('déjà')) alert('Cet email est déjà membre.');
+        else alert('Erreur : ' + txt);
+    }
+}
+
+function confirmDeletePostit(postitId) {
+    const el = document.getElementById('postit-edit-modal');
+    if (!el) return;
+    // Remplacer le contenu par une confirmation
+    const conf = el.querySelector('div');
+    if (conf) conf.innerHTML = `
+        <div style="padding:20px;text-align:center;">
+            <div style="font-size:32px;margin-bottom:12px;">🗑️</div>
+            <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Supprimer ce postit ?</div>
+            <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">Cette action supprimera aussi tous les messages.</div>
+            <div style="display:flex;gap:8px;">
+                <button onclick="document.getElementById('postit-edit-modal').remove()"
+                        style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+                <button onclick="executeDeletePostit('${postitId}')"
+                        style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Supprimer</button>
+            </div>
+        </div>`;
+}
+
+async function executeDeletePostit(postitId) {
+    document.getElementById('postit-edit-modal')?.remove();
+    const res = await fetchAuth('/api/postits/' + postitId, { method:'DELETE' });
+    if (res.ok) {
+        currentPostitId = null;
+        await loadGroupData(currentGroupId);
+    } else {
+        alert('Erreur : ' + await res.text());
+    }
+}
+
+
 async function loadGroupData(groupId) {
     const selDev = document.getElementById('sel-dev');
     const selPos = document.getElementById('sel-pos');
@@ -842,25 +1339,27 @@ async function loadGroupData(groupId) {
             postits.sort((a, b) => new Date(a.pickupDate) - new Date(b.pickupDate));
 
             if (postits && postits.length > 0) {
-                selPos.innerHTML = postits.map(p => {
-                    const d = new Date(p.pickupDate);
-                    const time = p.pickupDate ? d.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}) : '??:??';
-                    return `<option value="${p._id}">[${time}] ${truncate(p.name, 20)}</option>`;
-                }).join('');
-                selPos.value = postits[0]._id;
+                // Déterminer le postit à sélectionner (mémorisé ou premier)
+                const targetId = (currentPostitId && postits.find(p => p._id === currentPostitId))
+                    ? currentPostitId : postits[0]._id;
+                currentPostitId = targetId;
+                // Rendre les tuiles postits
+                renderPostitTabs(postits, targetId);
+                // Mettre à jour sel-pos caché
+                if (selPos) selPos.value = targetId;
             } else {
-                selPos.innerHTML = '<option value="">AUCUN CLIENT</option>';
-                selPos.value = "";
+                currentPostitId = null;
+                renderPostitTabs([], null);
+                if (selPos) { selPos.innerHTML = ''; selPos.value = ''; }
             }
         }
 
-        // 3. Mise à jour header et vue après remplissage des selects
+        // 3. Mise à jour header et vue
         updateVisualHeader();
         if (typeof refreshView === 'function') refreshView();
-        // Envoyer le postitId si disponible pour filtrer côté serveur
-        const _pid = document.getElementById('sel-pos')?.value;
-        if (typeof socket !== 'undefined' && socket) {
-            socket.emit('get-history', { groupId, postitId: _pid || undefined });
+        // Charger l'historique du postit sélectionné
+        if (socket && currentGroupId) {
+            socket.emit('get-history', { groupId, postitId: currentPostitId || undefined });
         }
         if (typeof updateBadge === 'function') updateBadge();
 
@@ -947,7 +1446,7 @@ function toggleLineCheck(messageId) {
     socket.emit('toggle-check-line', { messageId });
 
     const pSel = document.getElementById('sel-pos');
-    const pid = pSel ? pSel.value : null;
+    const pid = currentPostitId || (pSel ? pSel.value : null);
     if (!pid) return;
 
     // Recalcul du statut automatique
@@ -1658,17 +2157,13 @@ async function deleteDevice(id) {
 }
 
 async function deletePostit(id) {
-    // On garde ton confirm pour le post-it car c'est une action sensible
-    if(confirm("Supprimer ce client/commande ?")) {
-        try {
+    try {
             const res = await fetchAuth(`/api/postits/${id}`, { method: 'DELETE' });
             if (res.ok) {
-                const gid = document.getElementById('sel-group').value;
+                const gid = currentGroupId || document.getElementById('sel-group')?.value;
                 if (gid) {
                     await loadGroupData(gid);
                     await refreshParamsLists();
-                    
-                    // On force l'ouverture de l'accordéon des post-its
                     const checkP = document.getElementById('check-p');
                     if (checkP) checkP.checked = true;
                 }
@@ -1676,7 +2171,6 @@ async function deletePostit(id) {
         } catch (err) {
             console.error("Erreur deletePostit:", err);
         }
-    }
 }
 
 function updateBadge() {

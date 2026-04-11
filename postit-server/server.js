@@ -70,6 +70,11 @@ const groupSchema = new mongoose.Schema({
     siret:      String,
     phonePro:   String,
     emailPro:   String,
+    company:    String,
+    addr1:      String,
+    addr2:      String,
+    cp:         String,
+    ville:      String,
     // Abonnement Stripe (on stocke l'ID pour la gestion future)
     stripeSubscriptionId: String,
     subscriptionStatus:   { type: String, default: 'inactive' }, // inactive | active | past_due
@@ -354,12 +359,19 @@ app.get('/api/groups/:id/config', async (req, res) => {
             type: group.type || 'perso',
             isPro: group.isPro || false,
             isDefault: group.isDefault || false,
-            // Perso = pas de rayons visibles, Pro = rayons visibles
             hasRayons: group.isPro === true,
-            // Perso = max 5 postits actifs, Pro = illimité
             maxPostits: group.isPro ? 0 : 5,
             myRole,
-            joinCode: isOwner ? group.joinCode : null
+            joinCode: isOwner ? group.joinCode : null,
+            logoUrl:  group.logoUrl  || null,
+            company:  group.company  || null,
+            addr1:    group.addr1    || null,
+            addr2:    group.addr2    || null,
+            cp:       group.cp       || null,
+            ville:    group.ville    || null,
+            phonePro: group.phonePro || null,
+            emailPro: group.emailPro || null,
+            siret:    group.siret    || null,
         });
     } catch (err) {
         console.error("Erreur /api/groups/:id/config:", err);
@@ -370,7 +382,7 @@ app.get('/api/groups/:id/config', async (req, res) => {
 
 app.post('/api/groups', async (req, res) => {
     try {
-        const { name, type, siret, phonePro, emailPro } = req.body;
+        const { name, type, siret, phonePro, emailPro, company, addr1, addr2, cp, ville, logoUrl } = req.body;
         const userEmail = req.user.email; 
         
         if (!name) return res.status(400).send("Le nom du groupe est obligatoire");
@@ -386,9 +398,15 @@ app.post('/api/groups', async (req, res) => {
             joinCode: generateJoinCode(),
             type: groupType,
             isPro,
-            siret: isPro ? siret : undefined,
+            siret:    isPro ? siret    : undefined,
             phonePro: isPro ? phonePro : undefined,
             emailPro: isPro ? (emailPro || userEmail) : undefined,
+            company:  isPro ? company  : undefined,
+            addr1:    isPro ? addr1    : undefined,
+            addr2:    isPro ? addr2    : undefined,
+            cp:       isPro ? cp       : undefined,
+            ville:    isPro ? ville    : undefined,
+            logoUrl:  logoUrl || undefined,
             subscriptionStatus: isPro ? 'pending' : 'inactive'
         });
 
@@ -409,11 +427,17 @@ app.put('/api/groups/:id', async (req, res) => {
         if (!group) return res.status(404).send("Groupe introuvable");
         if (group.ownerEmail !== userEmail) return res.status(403).send("Accès refusé");
 
-        const { name, siret, phonePro, emailPro } = req.body;
+        const { name, siret, phonePro, emailPro, company, addr1, addr2, cp, ville, logoUrl } = req.body;
         if (name) group.name = name;
-        if (siret !== undefined) group.siret = siret;
+        if (siret    !== undefined) group.siret    = siret;
         if (phonePro !== undefined) group.phonePro = phonePro;
         if (emailPro !== undefined) group.emailPro = emailPro;
+        if (company  !== undefined) group.company  = company;
+        if (addr1    !== undefined) group.addr1    = addr1;
+        if (addr2    !== undefined) group.addr2    = addr2;
+        if (cp       !== undefined) group.cp       = cp;
+        if (ville    !== undefined) group.ville    = ville;
+        if (logoUrl  !== undefined) group.logoUrl  = logoUrl;
         await group.save();
         res.sendStatus(200);
     } catch (err) {

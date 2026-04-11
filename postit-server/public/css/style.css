@@ -186,3 +186,95 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 #eink-sim input[type="checkbox"], #prep-content input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; }
 
 .hidden { display: none !important; }
+/* ═══════════════════════════════════════════════════════════
+   SYSTÈME DE SKINS — 3 thèmes
+   Skin 0 (défaut) : brutaliste noir/blanc/beige  → déjà défini via :root
+   Skin 1 : "Ardoise" — bleu nuit, gris froid, accents cyan
+   Skin 2 : "Personnalisé" — couleurs choisies par l'utilisateur
+   Appliqué via body.skin-1 ou body.skin-2
+═══════════════════════════════════════════════════════════ */
+
+/* ── SKIN 1 : Ardoise (bleu nuit lisible) ─────────────────── */
+body.skin-1 { --bg:#1a1f2e; --accent:#60a5fa; }
+body.skin-1, body.skin-1 * { color:#e8eaf0; }
+body.skin-1 .fixed-header { background:#1a1f2e; border-bottom:2px solid #60a5fa; }
+body.skin-1 .page { background:#1a1f2e; }
+body.skin-1 h2, body.skin-1 .acc-label-text, body.skin-1 .acc-toggle-icon { color:#e8eaf0; }
+body.skin-1 .msg-row.me .msg-bubble { background:#2563eb; color:#fff; border-color:#2563eb; }
+body.skin-1 .msg-row.others .msg-bubble { background:#293148; color:#e8eaf0; border-color:#374166; }
+body.skin-1 .msg-author-tag { background:#374166 !important; color:#60a5fa !important; }
+body.skin-1 .msg-row.me .msg-author-tag { background:#1d4ed8 !important; color:#fff !important; }
+body.skin-1 .acc-item { border-bottom:1px solid rgba(255,255,255,0.07); }
+body.skin-1 .tab-bar { background:#293148; border-top:2px solid #60a5fa; }
+body.skin-1 .tab-item { color:#94a3b8; opacity:1; }
+body.skin-1 .tab-item.active { color:#60a5fa; opacity:1; }
+body.skin-1 .btn-send { background:#2563eb; color:#fff; }
+body.skin-1 .send-container { background:#1a1f2e; border-top:2px solid #374166; }
+body.skin-1 #msg-input { background:#293148; color:#e8eaf0; border-color:#374166; }
+body.skin-1 #eink-sim { background:#293148; border-color:#60a5fa; color:#e8eaf0; }
+body.skin-1 input, body.skin-1 select, body.skin-1 textarea { background:#293148; color:#e8eaf0; border-color:#374166; }
+body.skin-1 .btn-black, body.skin-1 .btn-send { background:#2563eb !important; color:#fff !important; }
+body.skin-1 .btn-plus-3d { background:#293148 !important; color:#60a5fa !important; border-color:#60a5fa !important; box-shadow:2px 2px 0 #60a5fa; }
+body.skin-1 .acc-toggle-icon { color:#60a5fa; }
+body.skin-1 #order-date-alert { background:#dc2626; }
+body.skin-1 .fixed-header, body.skin-1 #status-mini, body.skin-1 #user-badge { color:#e8eaf0; }
+
+/* ── SKIN 2 : Personnalisé ────────────────────────────────── */
+body.skin-2 { 
+    --bg:var(--custom-bg, #efeee9); 
+    --accent:var(--custom-accent, #18181b); 
+}
+body.skin-2 .fixed-header { background:var(--custom-bg, #efeee9); border-bottom:2px solid var(--custom-accent, #18181b); }
+body.skin-2 .page { background:var(--custom-bg, #efeee9); }
+body.skin-2 input, body.skin-2 select, body.skin-2 textarea { 
+    background:var(--custom-field, #fff); 
+    color:var(--custom-text, #18181b); 
+    border-color:var(--custom-accent, #18181b); 
+}
+body.skin-2 .btn-send, body.skin-2 .btn-black { 
+    background:var(--custom-btn-bg, #18181b); 
+    color:var(--custom-btn-text, #fff); 
+}
+body.skin-2 .send-container { background:var(--custom-bg, #efeee9); border-top:2px solid var(--custom-accent, #18181b); }
+body.skin-2 .tab-bar { background:var(--custom-field, #fff); border-top:2px solid var(--custom-accent, #18181b); }
+body.skin-2 .msg-row.me .msg-bubble { background:var(--custom-btn-bg, #18181b); color:var(--custom-btn-text, #fff); border-color:var(--custom-accent, #18181b); }
+body.skin-2 .msg-row.others .msg-bubble { background:var(--custom-field, #fff); color:var(--custom-text, #18181b); border-color:var(--custom-accent, #18181b); }
+body.skin-2 #eink-sim { background:var(--custom-field, #fff); border-color:var(--custom-accent, #18181b); color:var(--custom-text, #18181b); }
+body.skin-2 .acc-label-text { color:var(--custom-text, #18181b); }
+body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; color:var(--custom-text, #18181b) !important; border-color:var(--custom-accent, #18181b) !important; }
+
+/* ── SÉLECTEUR DE SKIN (fixé en bas de page Params) ─────── */
+#skin-selector {
+    position:sticky; bottom:0; background:var(--bg);
+    border-top:2px solid var(--accent); padding:10px;
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    z-index:100; margin-top:auto;
+}
+#skin-selector .skin-btn {
+    flex:1; min-width:80px; padding:8px 4px;
+    border:2px solid var(--accent); font-size:9px; font-weight:900;
+    text-transform:uppercase; cursor:pointer; text-align:center;
+    background:var(--bg); color:var(--accent);
+}
+#skin-selector .skin-btn.active { background:var(--accent); color:var(--bg); }
+#skin-color-pickers { width:100%; display:none; gap:6px; margin-top:6px; }
+#skin-color-pickers.visible { display:flex; }
+#skin-color-pickers label { font-size:8px; font-weight:900; text-transform:uppercase; }
+#skin-color-pickers input[type=color] { width:40px; height:30px; border:2px solid var(--accent); padding:0; cursor:pointer; background:none; }
+
+/* ── TUILES POSTITS (rangée horizontale dans le chat) ─────── */
+#postit-tabs-wrap {
+    flex-shrink: 0;
+    background: var(--bg);
+    border-bottom: 2px solid var(--accent);
+    padding: 6px 8px 4px 8px;
+}
+#postit-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+}
+#postit-tabs::-webkit-scrollbar { display: none; }
