@@ -111,48 +111,67 @@ async function loadGroupsList() {
             return ia - ib;
         });
 
-        container.innerHTML = `<div id="groups-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;">
-            ${ordered.map(g => {
-                const isPro = g.isPro;
-                const isActive = g._id === currentGroupId;
-                const roleMap = {owner:'✦', admin:'🔑', employe:'👷', client:'👤'};
-                const roleIcon = roleMap[g.myRole] || '';
-                const bg = isActive ? 'var(--accent)' : '#fff';
-                const color = isActive ? '#fff' : 'var(--accent)';
-                const shadow = isActive ? '3px 3px 0 var(--accent)' : '3px 3px 0 rgba(0,0,0,0.15)';
-                const border = isActive ? '2px solid var(--accent)' : '2px solid rgba(0,0,0,0.12)';
-                // Logo : logoUrl si disponible (pro OU perso), sinon initiale du nom
-                const logoHtml = g.logoUrl
-                    ? `<img src="${g.logoUrl}" style="width:32px;height:32px;object-fit:cover;border:1px solid rgba(0,0,0,0.1);margin-bottom:4px;">`
-                    : `<div style="width:32px;height:32px;background:rgba(0,0,0,0.07);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;margin-bottom:4px;">${g.name[0].toUpperCase()}</div>`;
-                return `<div
-                    id="tile-${g._id}"
-                    onclick="selectGroup('${g._id}')"
-                    ontouchstart="tileTouch(event,'${g._id}')"
-                    ontouchmove="tileTouchMove(event)"
-                    ontouchend="tileTouchEnd(event,'${g._id}')"
-                    style="background:${bg};color:${color};border:${border};box-shadow:${shadow};
-                           padding:10px 6px;cursor:pointer;display:flex;flex-direction:column;
-                           align-items:center;text-align:center;position:relative;
-                           min-height:90px;justify-content:center;user-select:none;">
-                    ${isPro ? `<span style="position:absolute;top:4px;right:4px;background:${isActive?'rgba(255,255,255,0.2)':'#18181b'};color:${isActive?'#fff':'#fff'};font-size:6px;font-weight:900;padding:1px 3px;line-height:1.4;">PRO</span>
-                    <span style="position:absolute;bottom:4px;right:4px;font-size:12px;opacity:0.5;">🛍️</span>` : ''}
-                    ${logoHtml}
-                    <div style="font-size:9px;font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;">${g.name}</div>
-                    <div style="font-size:8px;opacity:0.5;margin-top:2px;">${roleIcon}</div>
-                </div>`;
-            }).join('')}
+        const roleFull = {owner:'Proprio', admin:'Admin', employe:'Employé', client:'Membre'};
+        const groupTilesHtml = ordered.map(g => {
+            const isActive = g._id === currentGroupId;
+            const bg = isActive ? 'var(--accent)' : '#fff';
+            const color = isActive ? '#fff' : 'var(--accent)';
+            const canEdit = g.myRole === 'owner' || g.myRole === 'admin';
+            const logoHtml = g.logoUrl
+                ? `<img src="${g.logoUrl}" style="width:28px;height:28px;object-fit:cover;border:1px solid rgba(0,0,0,0.1);margin-bottom:3px;">`
+                : `<div style="width:28px;height:28px;background:rgba(0,0,0,0.07);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;margin-bottom:3px;">${g.name[0].toUpperCase()}</div>`;
+            return `<div id="tile-${g._id}"
+                ontouchstart="tileTouch(event,'${g._id}')"
+                ontouchmove="tileTouchMove(event)"
+                ontouchend="tileTouchEnd(event,'${g._id}')"
+                onclick="selectGroup('${g._id}')"
+                style="background:${bg};color:${color};border:2px solid ${isActive?'var(--accent)':'rgba(0,0,0,0.12)'};
+                       box-shadow:${isActive?'3px 3px 0 rgba(0,0,0,0.35)':'3px 3px 0 rgba(0,0,0,0.12)'};
+                       padding:8px 5px 16px 5px;cursor:pointer;display:flex;flex-direction:column;
+                       align-items:center;text-align:center;position:relative;
+                       min-height:88px;justify-content:center;user-select:none;touch-action:none;">
+                ${g.isPro ? `<span style="position:absolute;top:3px;right:3px;background:#18181b;color:#fff;font-size:6px;font-weight:900;padding:1px 3px;">PRO</span>
+                             <span style="position:absolute;bottom:14px;right:3px;font-size:10px;opacity:0.4;">🛍️</span>` : ''}
+                ${canEdit ? `<button onclick="event.stopPropagation();uiEditGroup('${g._id}')"
+                    style="position:absolute;bottom:2px;left:3px;background:none;border:none;font-size:11px;cursor:pointer;opacity:0.45;padding:1px;touch-action:manipulation;">⚙️</button>` : ''}
+                ${logoHtml}
+                <div style="font-size:8px;font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;padding:0 2px;">${g.name}</div>
+                <div style="font-size:7px;opacity:0.45;margin-top:1px;">${roleFull[g.myRole]||''}</div>
+            </div>`;
+        }).join('');
+
+        const addTileHtml = `<div onclick="uiCreateGroup(event)"
+            style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                   min-height:88px;cursor:pointer;border:2px dashed rgba(0,0,0,0.18);
+                   background:rgba(0,0,0,0.02);color:rgba(0,0,0,0.28);touch-action:manipulation;">
+            <div style="font-size:26px;font-weight:100;line-height:1;margin-bottom:3px;">+</div>
+            <div style="font-size:7px;font-weight:900;text-transform:uppercase;">Nouveau</div>
         </div>`;
 
-        // Activer le drag-and-drop tactile après rendu
-        initTileDragTouch();
+        container.innerHTML = `<div id="groups-grid"
+            style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;touch-action:none;">
+            ${addTileHtml}${groupTilesHtml}
+        </div>`;
+        _ensureTileDragGhost();
 
     } catch(err) { console.error('loadGroupsList:', err); }
 }
 
-// ── Drag & drop tactile pour mobile ──────────────────────────────────────────
-let _tileDragId = null, _tileDragEl = null, _tileGhost = null;
+// ── Drag & drop tactile avec fantôme visuel (style iOS) ─────────────────────
+let _tileDragId = null, _tileDragEl = null;
 let _tileTouchStartX = 0, _tileTouchStartY = 0, _tileMoved = false;
+let _tileLongPress = null;
+
+function _ensureTileDragGhost() {
+    if (document.getElementById('tile-ghost')) return;
+    const g = document.createElement('div');
+    g.id = 'tile-ghost';
+    g.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;opacity:0;' +
+        'border:2px solid var(--accent);background:#fff;box-shadow:6px 6px 0 rgba(0,0,0,0.3);' +
+        'padding:10px 8px;text-align:center;font-size:9px;font-weight:900;text-transform:uppercase;' +
+        'transform:scale(1.1) rotate(-2deg);min-width:72px;transition:opacity 0.12s;';
+    document.body.appendChild(g);
+}
 
 function tileTouch(e, id) {
     _tileDragId = id;
@@ -160,46 +179,84 @@ function tileTouch(e, id) {
     _tileTouchStartY = e.touches[0].clientY;
     _tileMoved = false;
     _tileDragEl = document.getElementById('tile-' + id);
+    if (_tileLongPress) clearTimeout(_tileLongPress);
+    _tileLongPress = setTimeout(() => {
+        if (!_tileMoved && _tileDragEl) {
+            if (navigator.vibrate) navigator.vibrate(25);
+            _tileDragEl.style.opacity = '0.35';
+            _tileDragEl.style.transform = 'scale(0.92)';
+            const ghost = document.getElementById('tile-ghost');
+            if (ghost) {
+                const nameEl = _tileDragEl.querySelector('div[style*="font-weight:900"]');
+                ghost.textContent = nameEl ? nameEl.textContent : '';
+                ghost.style.width = _tileDragEl.offsetWidth + 'px';
+                ghost.style.left  = (_tileTouchStartX - _tileDragEl.offsetWidth/2) + 'px';
+                ghost.style.top   = (_tileTouchStartY - _tileDragEl.offsetHeight/2 - 8) + 'px';
+                ghost.style.opacity = '0.9';
+            }
+        }
+    }, 350);
 }
 
 function tileTouchMove(e) {
-    if (!_tileDragEl) return;
+    if (!_tileDragEl || !_tileDragId) return;
     const dx = Math.abs(e.touches[0].clientX - _tileTouchStartX);
     const dy = Math.abs(e.touches[0].clientY - _tileTouchStartY);
     if (dx > 8 || dy > 8) {
-        _tileMoved = true;
+        if (_tileLongPress) { clearTimeout(_tileLongPress); _tileLongPress = null; }
+        if (!_tileMoved) {
+            _tileMoved = true;
+            _tileDragEl.style.opacity = '0.3';
+            _tileDragEl.style.transform = 'scale(0.92)';
+        }
         e.preventDefault();
-        _tileDragEl.style.opacity = '0.5';
-        _tileDragEl.style.transform = 'scale(0.95)';
-        // Trouver la tuile cible sous le doigt
-        const el = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
-        const target = el && el.closest('[id^="tile-"]');
-        document.querySelectorAll('[id^="tile-"]').forEach(t => t.style.outline = '');
+        const cx = e.touches[0].clientX, cy = e.touches[0].clientY;
+        const ghost = document.getElementById('tile-ghost');
+        if (ghost && parseFloat(ghost.style.opacity) > 0) {
+            ghost.style.left = (cx - parseInt(ghost.style.width)/2) + 'px';
+            ghost.style.top  = (cy - 55) + 'px';
+            ghost.style.opacity = '0.9';
+        }
+        const el = document.elementFromPoint(cx, cy);
+        const target = el && el.closest('#groups-grid [id^="tile-"]');
+        document.querySelectorAll('#groups-grid [id^="tile-"]').forEach(t => {
+            t.style.outline = ''; if (t.id !== 'tile-' + _tileDragId) t.style.transform = '';
+        });
+        _tileDragEl.style.transform = 'scale(0.92)';
         if (target && target.id !== 'tile-' + _tileDragId) {
-            target.style.outline = '2px solid var(--accent)';
+            target.style.outline = '2px dashed var(--accent)';
         }
     }
 }
 
 function tileTouchEnd(e, id) {
-    if (!_tileDragEl) return;
+    if (_tileLongPress) { clearTimeout(_tileLongPress); _tileLongPress = null; }
+    const ghost = document.getElementById('tile-ghost');
+    if (ghost) ghost.style.opacity = '0';
+    if (!_tileDragEl) { _tileDragId = null; _tileMoved = false; return; }
+
     _tileDragEl.style.opacity = '1';
     _tileDragEl.style.transform = '';
-    document.querySelectorAll('[id^="tile-"]').forEach(t => t.style.outline = '');
+    document.querySelectorAll('#groups-grid [id^="tile-"]').forEach(t => {
+        t.style.outline = ''; t.style.transform = '';
+    });
 
     if (_tileMoved) {
         e.preventDefault();
         const endEl = document.elementFromPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
-        const target = endEl && endEl.closest('[id^="tile-"]');
+        const target = endEl && endEl.closest('#groups-grid [id^="tile-"]');
         if (target && target.id !== 'tile-' + _tileDragId) {
             const targetId = target.id.replace('tile-', '');
-            const allTiles = [...document.querySelectorAll('[id^="tile-"]')].map(el => el.id.replace('tile-',''));
-            const fi = allTiles.indexOf(_tileDragId);
-            const ti = allTiles.indexOf(targetId);
+            // Récupérer tous les ids de tuiles groupes (pas la tuile add ni le dragged)
+            const allIds = [...document.querySelectorAll('#groups-grid [id^="tile-"]')]
+                .map(el => el.id.replace('tile-',''))
+                .filter(tid => tid && tid.length > 5); // vrais _id MongoDB
+            const fi = allIds.indexOf(_tileDragId);
+            const ti = allIds.indexOf(targetId);
             if (fi !== -1 && ti !== -1) {
-                allTiles.splice(fi, 1);
-                allTiles.splice(ti, 0, _tileDragId);
-                groupsOrder = allTiles;
+                allIds.splice(fi, 1);
+                allIds.splice(ti, 0, _tileDragId);
+                groupsOrder = allIds;
                 localStorage.setItem('groupsOrder', JSON.stringify(groupsOrder));
                 loadGroupsList();
             }
@@ -208,12 +265,7 @@ function tileTouchEnd(e, id) {
     _tileDragId = null; _tileDragEl = null; _tileMoved = false;
 }
 
-function initTileDragTouch() {
-    // Empêcher le scroll pendant le drag tactile sur la grille
-    const grid = document.getElementById('groups-grid');
-    if (grid) grid.style.touchAction = 'none';
-}
-
+function initTileDragTouch() { _ensureTileDragGhost(); }
 async function selectGroup(groupId) {
     // 1. Mettre à jour la source de vérité IMMÉDIATEMENT
     currentGroupId = groupId;
@@ -251,6 +303,11 @@ async function selectGroup(groupId) {
 
     // 8. Aller sur le chat
     goToPage(PAGE_CHAT);
+    // Afficher les tuiles postits dans l'entête et cacher le titre
+    const hpt = document.getElementById('header-postit-tabs');
+    if (hpt) hpt.style.display = 'flex';
+    const ptEl = document.getElementById('page-title');
+    if (ptEl) ptEl.style.display = 'none';
 }
 
 function applyGroupConfig() {
@@ -646,6 +703,217 @@ async function submitCreateGroup() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// ÉDITION GROUPE — Modal ⚙️
+// ═══════════════════════════════════════════════════════════════════════
+async function uiEditGroup(groupId) {
+    document.getElementById('group-modal')?.remove();
+    try {
+        const res = await fetchAuth('/api/groups/' + groupId + '/config');
+        if (!res.ok) return alert('Erreur chargement groupe');
+        const g = await res.json();
+        _openGroupEditModal(groupId, g);
+    } catch(e) { console.error(e); }
+}
+
+function _openGroupEditModal(groupId, g) {
+    const isPro   = g.isPro   || false;
+    const isOwner = g.myRole === 'owner';
+    const v = (f, def='') => g[f] || def;
+
+    const modalHtml = `
+    <div id="group-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:14px;overflow-y:auto;">
+      <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.4);padding:18px;width:100%;max-width:400px;margin-top:18px;">
+        <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:12px;">⚙️ ${v('name','Groupe')}</h3>
+
+        <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Nom</div>
+        <input type="text" id="gm-name" value="${v('name')}"
+               style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:9px;background:white;box-sizing:border-box;">
+
+        <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Logo</div>
+        ${g.logoUrl ? `<img src="${g.logoUrl}" style="width:38px;height:38px;object-fit:cover;border:2px solid var(--accent);margin-bottom:5px;display:block;">` : ''}
+        <input type="file" id="gm-logo" accept="image/*"
+               style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:5px;font-size:11px;margin-bottom:9px;background:white;box-sizing:border-box;">
+
+        ${isPro ? `
+        <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
+          <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">Infos entreprise</div>
+          <input type="text" id="gm-company" value="${v('company')}" placeholder="Société"
+                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
+          <div style="display:flex;gap:5px;margin-bottom:5px;">
+            <input type="text" id="gm-cp"    value="${v('cp')}"    placeholder="CP"
+                   style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
+            <input type="text" id="gm-ville" value="${v('ville')}" placeholder="Ville"
+                   style="flex:2;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
+          </div>
+          <input type="tel"   id="gm-phone" value="${v('phonePro')}" placeholder="Téléphone"
+                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
+          <input type="email" id="gm-email" value="${v('emailPro')}" placeholder="Email"
+                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
+          <input type="text"  id="gm-siret" value="${v('siret')}"   placeholder="SIRET"
+                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
+        </div>` : ''}
+
+        <!-- Membres -->
+        <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
+          <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">${isPro ? 'Membres & Droits' : 'Participants'}</div>
+          <div id="members-matrix-wrap" style="font-size:10px;color:#888;min-height:30px;">Chargement…</div>
+          <div style="display:flex;gap:5px;margin-top:7px;">
+            <input type="email" id="new-member-email" placeholder="${isPro?'Inviter par email…':'Ajouter participant…'}"
+                   style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:11px;background:white;box-sizing:border-box;">
+            <button onclick="addMemberToMatrix('${groupId}')"
+                    style="padding:7px 11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;cursor:pointer;">+</button>
+          </div>
+        </div>
+
+        ${isOwner ? `<div style="border-top:2px solid rgba(220,38,38,0.15);padding-top:7px;margin-bottom:7px;">
+          <button onclick="confirmDeleteGroup('${groupId}')"
+                  style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️ Supprimer ce groupe</button>
+        </div>` : ''}
+
+        <div style="display:flex;gap:8px;">
+          <button onclick="document.getElementById('group-modal').remove()"
+                  style="flex:1;padding:11px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+          <button onclick="submitEditGroup('${groupId}')"
+                  style="flex:1;padding:11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Modifier</button>
+        </div>
+      </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    setTimeout(() => {
+        document.getElementById('gm-name')?.focus();
+        loadMembersMatrix(groupId, isPro);
+    }, 80);
+}
+
+// ── Matrice membres ───────────────────────────────────────────────────────────
+async function loadMembersMatrix(groupId, isPro) {
+    const wrap = document.getElementById('members-matrix-wrap');
+    if (!wrap) return;
+    try {
+        const res = await fetchAuth('/api/groups/' + groupId + '/members');
+        if (!res.ok) { wrap.innerHTML = '<em style="opacity:0.4;">Erreur</em>'; return; }
+        const members = await res.json();
+        if (!members.length) { wrap.innerHTML = '<em style="opacity:0.4;font-size:10px;">Aucun membre</em>'; return; }
+
+        if (isPro) {
+            wrap.innerHTML = `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+            <table style="width:100%;border-collapse:collapse;font-size:10px;min-width:280px;">
+              <thead><tr style="border-bottom:2px solid var(--accent);">
+                <th style="text-align:left;padding:4px 2px;font-size:7px;text-transform:uppercase;opacity:0.5;">Email</th>
+                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;min-width:44px;">Admin</th>
+                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;min-width:44px;">Employé</th>
+                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;min-width:44px;">Client</th>
+                <th style="width:22px;"></th>
+              </tr></thead>
+              <tbody>${members.map(m => {
+                const key = m.email.replace(/[@.]/g,'-');
+                return `<tr style="border-bottom:1px solid rgba(0,0,0,0.06);">
+                  <td style="padding:5px 2px;font-size:9px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.email}">${m.email.split('@')[0]}</td>
+                  <td style="text-align:center;padding:4px 3px;"><input type="radio" name="role-${key}" value="admin" ${m.role==='admin'?'checked':''} onchange="setMemberRole('${groupId}','${m.email}','admin')" style="width:16px;height:16px;cursor:pointer;margin:0;accent-color:var(--accent);"></td>
+                  <td style="text-align:center;padding:4px 3px;"><input type="radio" name="role-${key}" value="employe" ${m.role==='employe'?'checked':''} onchange="setMemberRole('${groupId}','${m.email}','employe')" style="width:16px;height:16px;cursor:pointer;margin:0;accent-color:var(--accent);"></td>
+                  <td style="text-align:center;padding:4px 3px;"><input type="radio" name="role-${key}" value="client" ${m.role==='client'?'checked':''} onchange="setMemberRole('${groupId}','${m.email}','client')" style="width:16px;height:16px;cursor:pointer;margin:0;accent-color:var(--accent);"></td>
+                  <td style="text-align:center;padding:2px;"><button onclick="removeMemberFromMatrix('${groupId}','${m.email}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:15px;line-height:1;padding:2px;">×</button></td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table></div>`;
+        } else {
+            wrap.innerHTML = members.map(m => `
+            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,0.05);">
+                <span style="flex:1;font-size:10px;">${m.email}</span>
+                <button onclick="removeMemberFromMatrix('${groupId}','${m.email}')"
+                        style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:2px;">×</button>
+            </div>`).join('');
+        }
+    } catch(e) { wrap.innerHTML = '<em style="opacity:0.4;font-size:10px;">Erreur</em>'; }
+}
+
+async function addMemberToMatrix(groupId) {
+    const email = document.getElementById('new-member-email')?.value?.trim();
+    if (!email || !email.includes('@')) return alert('Email invalide.');
+    const isPro = currentGroupConfig?.isPro;
+    const res = await fetchAuth('/api/groups/' + groupId + '/members', {
+        method:'POST', body: JSON.stringify({ email, role: 'client' })
+    });
+    if (res.ok) {
+        document.getElementById('new-member-email').value = '';
+        loadMembersMatrix(groupId, isPro);
+    } else {
+        const t = await res.text();
+        alert(t.includes('déjà') ? 'Déjà membre.' : 'Erreur : ' + t);
+    }
+}
+
+async function setMemberRole(groupId, email, role) {
+    await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), {
+        method:'PUT', body: JSON.stringify({ role })
+    });
+}
+
+async function removeMemberFromMatrix(groupId, email) {
+    const res = await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), { method:'DELETE' });
+    if (res.ok) loadMembersMatrix(groupId, currentGroupConfig?.isPro);
+}
+
+async function submitEditGroup(groupId) {
+    const name = document.getElementById('gm-name')?.value?.trim();
+    if (!name) return alert('Le nom est obligatoire.');
+    const isPro = currentGroupConfig?.isPro;
+    const payload = {
+        name,
+        company:  document.getElementById('gm-company')?.value?.trim() || '',
+        cp:       document.getElementById('gm-cp')?.value?.trim()      || '',
+        ville:    document.getElementById('gm-ville')?.value?.trim()   || '',
+        phonePro: document.getElementById('gm-phone')?.value?.trim()   || '',
+        emailPro: document.getElementById('gm-email')?.value?.trim()   || '',
+        siret:    document.getElementById('gm-siret')?.value?.trim()   || '',
+    };
+    const logoFile = document.getElementById('gm-logo')?.files?.[0];
+    if (logoFile) {
+        try {
+            const fd = new FormData(); fd.append('file', logoFile);
+            const token = localStorage.getItem('token');
+            const r = await fetch('/api/upload', { method:'POST', headers:{'Authorization':`Bearer ${token}`}, body:fd });
+            if (r.ok) { const d = await r.json(); payload.logoUrl = d.url; }
+        } catch(e) {}
+    }
+    const res = await fetchAuth('/api/groups/' + groupId, { method:'PUT', body: JSON.stringify(payload) });
+    document.getElementById('group-modal')?.remove();
+    if (res.ok) { await loadGroups(groupId); loadGroupsList(); }
+    else alert('Erreur : ' + await res.text());
+}
+
+function confirmDeleteGroup(groupId) {
+    const modal = document.getElementById('group-modal');
+    if (!modal) return;
+    const inner = modal.querySelector('div');
+    if (inner) inner.innerHTML = `
+      <div style="padding:22px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
+        <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Supprimer ce groupe ?</div>
+        <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">Tous les postits et messages seront supprimés.</div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="document.getElementById('group-modal').remove()"
+                  style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+          <button onclick="executeDeleteGroup('${groupId}')"
+                  style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Supprimer</button>
+        </div>
+      </div>`;
+}
+
+async function executeDeleteGroup(groupId) {
+    document.getElementById('group-modal')?.remove();
+    const res = await fetchAuth('/api/groups/' + groupId, { method:'DELETE' });
+    if (res.ok) {
+        currentGroupId = null; currentGroupConfig = null;
+        localStorage.removeItem('currentGroupId');
+        await loadGroups();
+        loadGroupsList();
+    } else alert('Erreur : ' + await res.text());
+}
+
+
 async function uiCreateDevice(e) {
     if(e) e.stopPropagation();
     
@@ -958,10 +1226,10 @@ let currentPostitId = null;
 // Cache des postits du groupe courant
 let _cachedPostits = [];
 
-// ── Rendu de la rangée de tuiles ─────────────────────────────────────────────
+// ── Rendu tuiles postits dans l'entête ───────────────────────────────────────
 function renderPostitTabs(postits, selectedId) {
-    const wrap = document.getElementById('postit-tabs');
-    if (!wrap) return;
+    const wrap = document.getElementById('header-postit-tabs');
+    const hiddenWrap = document.getElementById('postit-tabs');
     _cachedPostits = postits || [];
 
     const cfg = currentGroupConfig || {};
@@ -1019,7 +1287,8 @@ function renderPostitTabs(postits, selectedId) {
            </div>`
         : '';
 
-    wrap.innerHTML = tabs + addTab;
+    if (wrap) wrap.innerHTML = tabs + addTab;
+    if (hiddenWrap) hiddenWrap.innerHTML = '';
 
     // Mettre à jour sel-pos caché (compatibilité)
     const selPos = document.getElementById('sel-pos');
@@ -1488,7 +1757,7 @@ function changeStatusManually(pid) {
 async function refreshView(forceScrollBottom = false) {
     if (window._editingMessageId) return;
     const pSel = document.getElementById('sel-pos');
-    const pid = pSel ? pSel.value : null;
+    const pid = currentPostitId || (pSel ? pSel.value : null);
     const chat = document.getElementById('chat-history');
     // (pas de guard ici - refreshView affiche ce qui est dans allMsgs)
     const einkSmall = document.getElementById('eink-sim');

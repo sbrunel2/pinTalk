@@ -53,4 +53,13 @@ function goToPage(index) {
     if (index !== PAGE_PREP) localStorage.setItem('lastPage', index);
     if (index === PAGE_GROUPES && typeof loadGroupsList === 'function') loadGroupsList();
     if (index === PAGE_ARCHIVES && typeof initArchiveSelectors === 'function') initArchiveSelectors();
+
+    // Alterner titre / tuiles postits dans l'entête
+    const hpt  = document.getElementById('header-postit-tabs');
+    const ptEl = document.getElementById('page-title');
+    const hi   = document.getElementById('header-toggle-icon');
+    const onChat = (index === PAGE_CHAT);
+    if (hpt)  hpt.style.display  = onChat ? 'flex' : 'none';
+    if (ptEl) ptEl.style.display = onChat ? 'none' : '';
+    if (hi)   hi.style.display   = onChat ? 'none' : '';
 }

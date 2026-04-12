@@ -278,3 +278,32 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
     padding-bottom: 2px;
 }
 #postit-tabs::-webkit-scrollbar { display: none; }
+
+/* ── Entête : tuiles postits ─────────────────────────────────*/
+#header-postit-tabs {
+    display: none;
+    gap: 5px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    align-items: stretch;
+    flex: 1;
+}
+#header-postit-tabs::-webkit-scrollbar { display: none; }
+#header-postit-tabs > div {
+    flex-shrink: 0;
+    width: 68px;
+    min-height: 44px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    position: relative;
+    padding: 4px 3px 12px 3px;
+    font-size: 8px;
+    font-weight: 900;
+    text-transform: uppercase;
+    user-select: none;
+}

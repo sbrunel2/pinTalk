@@ -22,34 +22,37 @@
 </div>
 
 <!-- HEADER FIXE (réductible) -->
-<div class="fixed-header" id="fixed-header" style="cursor:pointer; user-select:none;">
-    <!-- Ligne unique : titre | infos grp/dev/pos | bouton ⏏ -->
-    <div style="display:flex; justify-content:space-between; align-items:center; width:100%;"
-         onclick="toggleHeader()">
-        <!-- Gauche : titre + flèche -->
-        <div style="display:flex; align-items:center; gap:8px; min-width:0; flex:1;">
-            <h2 id="page-title" class="font-black italic uppercase" style="margin:0; font-size:16px; white-space:nowrap;">Mes Groupes</h2>
-            <span id="header-toggle-icon" style="font-size:12px; opacity:0.4; flex-shrink:0;">▲</span>
+<div class="fixed-header" id="fixed-header">
+    <!-- Ligne principale : titre OU tuiles postits | bouton ⏏ -->
+    <div style="display:flex; align-items:center; width:100%; gap:6px; min-height:44px;">
+        <!-- Titre de page (masqué sur le chat) -->
+        <div style="flex-shrink:0; display:flex; align-items:center; gap:5px; cursor:pointer;" onclick="toggleHeader()">
+            <h2 id="page-title" class="font-black italic uppercase" style="margin:0; font-size:15px; white-space:nowrap;">Groupes</h2>
+            <span id="header-toggle-icon" style="font-size:11px; opacity:0.35;">▲</span>
         </div>
-        <!-- Centre : GRP / DEV / POS condensés -->
-        <div id="status-mini" style="display:flex; flex-direction:column; align-items:flex-end; font-size:8px; font-weight:900; text-transform:uppercase; line-height:1.3; opacity:0.7; margin:0 8px; min-width:0; flex:1; text-align:right;">
-            <span style="color:#2563eb;">GRP: <span id="st-grp">…</span></span>
-            <span>DEV: <span id="st-dev">…</span></span>
-            <span style="opacity:0.6;">POS: <span id="st-pos">…</span></span>
+        <!-- Tuiles postits dans l'entête (visibles seulement sur page Chat) -->
+        <div id="header-postit-tabs"
+             style="flex:1; display:none; overflow-x:auto; -webkit-overflow-scrolling:touch;
+                    scrollbar-width:none; gap:5px;">
         </div>
-        <!-- Droite : bouton déconnexion -->
-        <button onclick="event.stopPropagation(); logout()"
-                style="font-size:16px; background:#18181b; color:white; border:none; cursor:pointer; padding:5px 8px; flex-shrink:0;">⏏</button>
+        <!-- Bouton déconnexion -->
+        <button onclick="logout()"
+                style="flex-shrink:0; font-size:15px; background:var(--accent); color:white;
+                       border:none; cursor:pointer; padding:5px 8px;">⏏</button>
     </div>
-    <!-- Détails masquables : nom utilisateur -->
-    <div id="header-details" style="width:100%; margin-top:4px; padding-top:4px; border-top:1px solid rgba(0,0,0,0.1);">
+    <!-- Ligne masquable : nom utilisateur -->
+    <div id="header-details" style="width:100%; padding-top:3px; border-top:1px solid rgba(0,0,0,0.08); cursor:pointer;" onclick="toggleHeader()">
         <div id="user-badge" style="font-size:8px; font-weight:900; opacity:0.35; text-transform:uppercase;">
             👤 <span id="user-name-display">...</span>
         </div>
     </div>
 </div>
-<!-- span caché pour compatibilité JS -->
+<!-- Spans cachés compatibilité JS -->
 <span id="st-grp-mini" style="display:none;"></span>
+<span id="st-grp"      style="display:none;"></span>
+<span id="st-dev"      style="display:none;"></span>
+<span id="st-pos"      style="display:none;"></span>
+<div  id="status-mini" style="display:none;"></div>
 
 <!-- VIEWPORT : 5 pages (0-4) -->
 <div id="viewport">
@@ -190,10 +193,8 @@
     <div class="page px-0 pt-24" id="p3"
          style="display:flex; flex-direction:column; overflow:hidden; padding-bottom:130px !important;">
 
-        <!-- ── RANGÉE DE TUILES POSTITS ────────────────────────────── -->
-        <div id="postit-tabs-wrap" style="flex-shrink:0; background:var(--bg); border-bottom:2px solid var(--accent); padding:6px 8px;">
-            <div id="postit-tabs" style="display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px;"></div>
-        </div>
+        <!-- tuiles postits maintenant dans fixed-header -->
+        <div id="postit-tabs" style="display:none;"></div>
 
         <!-- Alerte date manquante (Pro uniquement) -->
         <div id="order-date-alert" style="display:none; background:#dc2626; color:white; padding:5px 10px; font-size:9px; font-weight:900; text-transform:uppercase; flex-shrink:0;">
