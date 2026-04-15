@@ -98,8 +98,18 @@ async function loadGroupsList() {
         const res = await fetchAuth('/api/groups/mine');
         if (!res.ok) { container.innerHTML = '<p style="text-align:center;opacity:0.4;margin-top:30px;">Erreur.</p>'; return; }
         const groups = await res.json();
+        // Pas de groupes → afficher quand même la tuile "+"
         if (!groups.length) {
-            container.innerHTML = '<p style="text-align:center;opacity:0.4;font-size:11px;margin-top:40px;">Aucun groupe.<br>Créez-en un dans Paramètres.</p>';
+            container.innerHTML = `<div id="groups-grid"
+                style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;">
+                <div onclick="uiCreateGroup(event)"
+                     style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                            min-height:88px;cursor:pointer;border:2px dashed rgba(0,0,0,0.18);
+                            background:rgba(0,0,0,0.02);color:rgba(0,0,0,0.28);touch-action:manipulation;">
+                    <div style="font-size:26px;font-weight:100;line-height:1;margin-bottom:3px;">+</div>
+                    <div style="font-size:7px;font-weight:900;text-transform:uppercase;">Nouveau</div>
+                </div></div>`;
+            _ensureTileDragGhost();
             return;
         }
         // Trier selon l'ordre mémorisé
@@ -114,7 +124,7 @@ async function loadGroupsList() {
         const roleFull = {owner:'Proprio', admin:'Admin', employe:'Employé', client:'Membre'};
         const groupTilesHtml = ordered.map(g => {
             const isActive = g._id === currentGroupId;
-            const bg = isActive ? 'var(--accent)' : '#fff';
+            const bg    = isActive ? 'var(--accent)' : '#fff';
             const color = isActive ? '#fff' : 'var(--accent)';
             const canEdit = g.myRole === 'owner' || g.myRole === 'admin';
             const logoHtml = g.logoUrl
@@ -125,18 +135,19 @@ async function loadGroupsList() {
                 ontouchmove="tileTouchMove(event)"
                 ontouchend="tileTouchEnd(event,'${g._id}')"
                 onclick="selectGroup('${g._id}')"
-                style="background:${bg};color:${color};border:2px solid ${isActive?'var(--accent)':'rgba(0,0,0,0.12)'};
+                style="background:${bg};color:${color};
+                       border:2px solid ${isActive?'var(--accent)':'rgba(0,0,0,0.12)'};
                        box-shadow:${isActive?'3px 3px 0 rgba(0,0,0,0.35)':'3px 3px 0 rgba(0,0,0,0.12)'};
                        padding:8px 5px 16px 5px;cursor:pointer;display:flex;flex-direction:column;
                        align-items:center;text-align:center;position:relative;
-                       min-height:88px;justify-content:center;user-select:none;touch-action:none;">
+                       min-height:88px;justify-content:center;
+                       user-select:none;-webkit-user-select:none;touch-action:none;">
                 ${g.isPro ? `<span style="position:absolute;top:3px;right:3px;background:#18181b;color:#fff;font-size:6px;font-weight:900;padding:1px 3px;">PRO</span>
                              <span style="position:absolute;bottom:14px;right:3px;font-size:10px;opacity:0.4;">🛍️</span>` : ''}
                 ${canEdit ? `<button onclick="event.stopPropagation();uiEditGroup('${g._id}')"
                     style="position:absolute;bottom:2px;left:3px;background:none;border:none;font-size:11px;cursor:pointer;opacity:0.45;padding:1px;touch-action:manipulation;">⚙️</button>` : ''}
                 ${logoHtml}
-                <div style="font-size:8px;font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;padding:0 2px;">${g.name}</div>
-                <div style="font-size:7px;opacity:0.45;margin-top:1px;">${roleFull[g.myRole]||''}</div>
+                <div style="font-size:8px;font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;padding:0 2px;pointer-events:none;">${g.name}</div>
             </div>`;
         }).join('');
 
@@ -167,9 +178,10 @@ function _ensureTileDragGhost() {
     const g = document.createElement('div');
     g.id = 'tile-ghost';
     g.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;opacity:0;' +
-        'border:2px solid var(--accent);background:#fff;box-shadow:6px 6px 0 rgba(0,0,0,0.3);' +
-        'padding:10px 8px;text-align:center;font-size:9px;font-weight:900;text-transform:uppercase;' +
-        'transform:scale(1.1) rotate(-2deg);min-width:72px;transition:opacity 0.12s;';
+        'border:2px solid var(--accent);background:rgba(255,255,255,0.92);' +
+        'box-shadow:4px 4px 0 rgba(0,0,0,0.25);overflow:hidden;' +
+        'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+        'transition:opacity 0.1s;';
     document.body.appendChild(g);
 }
 
@@ -183,19 +195,20 @@ function tileTouch(e, id) {
     _tileLongPress = setTimeout(() => {
         if (!_tileMoved && _tileDragEl) {
             if (navigator.vibrate) navigator.vibrate(25);
-            _tileDragEl.style.opacity = '0.35';
-            _tileDragEl.style.transform = 'scale(0.92)';
+            _tileDragEl.style.opacity = '0.4';
             const ghost = document.getElementById('tile-ghost');
             if (ghost) {
-                const nameEl = _tileDragEl.querySelector('div[style*="font-weight:900"]');
-                ghost.textContent = nameEl ? nameEl.textContent : '';
-                ghost.style.width = _tileDragEl.offsetWidth + 'px';
-                ghost.style.left  = (_tileTouchStartX - _tileDragEl.offsetWidth/2) + 'px';
-                ghost.style.top   = (_tileTouchStartY - _tileDragEl.offsetHeight/2 - 8) + 'px';
-                ghost.style.opacity = '0.9';
+                // Ghost = même taille que la tuile réelle
+                const rect = _tileDragEl.getBoundingClientRect();
+                ghost.style.width  = rect.width + 'px';
+                ghost.style.height = rect.height + 'px';
+                ghost.innerHTML = _tileDragEl.innerHTML;
+                ghost.style.left = rect.left + 'px';
+                ghost.style.top  = rect.top  + 'px';
+                ghost.style.opacity = '0.85';
             }
         }
-    }, 350);
+    }, 320);
 }
 
 function tileTouchMove(e) {
@@ -204,18 +217,14 @@ function tileTouchMove(e) {
     const dy = Math.abs(e.touches[0].clientY - _tileTouchStartY);
     if (dx > 8 || dy > 8) {
         if (_tileLongPress) { clearTimeout(_tileLongPress); _tileLongPress = null; }
-        if (!_tileMoved) {
-            _tileMoved = true;
-            _tileDragEl.style.opacity = '0.3';
-            _tileDragEl.style.transform = 'scale(0.92)';
-        }
+        if (!_tileMoved) { _tileMoved = true; _tileDragEl.style.opacity = '0.3'; _tileDragEl.style.transform = 'scale(0.92)'; }
         e.preventDefault();
         const cx = e.touches[0].clientX, cy = e.touches[0].clientY;
         const ghost = document.getElementById('tile-ghost');
         if (ghost && parseFloat(ghost.style.opacity) > 0) {
             ghost.style.left = (cx - parseInt(ghost.style.width)/2) + 'px';
-            ghost.style.top  = (cy - 55) + 'px';
-            ghost.style.opacity = '0.9';
+            ghost.style.top  = (cy - parseInt(ghost.style.height)/2) + 'px';
+            ghost.style.opacity = '0.85';
         }
         const el = document.elementFromPoint(cx, cy);
         const target = el && el.closest('#groups-grid [id^="tile-"]');
@@ -223,9 +232,7 @@ function tileTouchMove(e) {
             t.style.outline = ''; if (t.id !== 'tile-' + _tileDragId) t.style.transform = '';
         });
         _tileDragEl.style.transform = 'scale(0.92)';
-        if (target && target.id !== 'tile-' + _tileDragId) {
-            target.style.outline = '2px dashed var(--accent)';
-        }
+        if (target && target.id !== 'tile-' + _tileDragId) target.style.outline = '2px dashed var(--accent)';
     }
 }
 
@@ -234,28 +241,25 @@ function tileTouchEnd(e, id) {
     const ghost = document.getElementById('tile-ghost');
     if (ghost) ghost.style.opacity = '0';
     if (!_tileDragEl) { _tileDragId = null; _tileMoved = false; return; }
-
-    _tileDragEl.style.opacity = '1';
-    _tileDragEl.style.transform = '';
-    document.querySelectorAll('#groups-grid [id^="tile-"]').forEach(t => {
-        t.style.outline = ''; t.style.transform = '';
-    });
-
+    _tileDragEl.style.opacity = '1'; _tileDragEl.style.transform = '';
+    document.querySelectorAll('#groups-grid [id^="tile-"]').forEach(t => { t.style.outline = ''; t.style.transform = ''; });
     if (_tileMoved) {
         e.preventDefault();
+        e.stopPropagation();
+        // Bloquer le click suivant (évite d'entrer dans le groupe après un drag)
+        window._tileJustDragged = true;
+        setTimeout(() => { window._tileJustDragged = false; }, 300);
+
         const endEl = document.elementFromPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
         const target = endEl && endEl.closest('#groups-grid [id^="tile-"]');
         if (target && target.id !== 'tile-' + _tileDragId) {
             const targetId = target.id.replace('tile-', '');
-            // Récupérer tous les ids de tuiles groupes (pas la tuile add ni le dragged)
             const allIds = [...document.querySelectorAll('#groups-grid [id^="tile-"]')]
                 .map(el => el.id.replace('tile-',''))
-                .filter(tid => tid && tid.length > 5); // vrais _id MongoDB
-            const fi = allIds.indexOf(_tileDragId);
-            const ti = allIds.indexOf(targetId);
+                .filter(tid => tid && tid.length > 5);
+            const fi = allIds.indexOf(_tileDragId), ti = allIds.indexOf(targetId);
             if (fi !== -1 && ti !== -1) {
-                allIds.splice(fi, 1);
-                allIds.splice(ti, 0, _tileDragId);
+                allIds.splice(fi, 1); allIds.splice(ti, 0, _tileDragId);
                 groupsOrder = allIds;
                 localStorage.setItem('groupsOrder', JSON.stringify(groupsOrder));
                 loadGroupsList();
@@ -267,6 +271,8 @@ function tileTouchEnd(e, id) {
 
 function initTileDragTouch() { _ensureTileDragGhost(); }
 async function selectGroup(groupId) {
+    // Ignorer si on vient de finir un drag (évite navigation accidentelle)
+    if (window._tileJustDragged) return;
     // 1. Mettre à jour la source de vérité IMMÉDIATEMENT
     currentGroupId = groupId;
     localStorage.setItem('currentGroupId', groupId);
@@ -303,11 +309,13 @@ async function selectGroup(groupId) {
 
     // 8. Aller sur le chat
     goToPage(PAGE_CHAT);
-    // Afficher les tuiles postits dans l'entête et cacher le titre
-    const hpt = document.getElementById('header-postit-tabs');
-    if (hpt) hpt.style.display = 'flex';
-    const ptEl = document.getElementById('page-title');
-    if (ptEl) ptEl.style.display = 'none';
+    // Afficher les tuiles postits dans l'entête — géré aussi par navigation.js/goToPage
+    const hpt    = document.getElementById('header-postit-tabs');
+    const ptWrap = document.getElementById('header-title-wrap');
+    const spacer = document.getElementById('header-spacer');
+    if (hpt)    hpt.style.display    = 'flex';
+    if (ptWrap) ptWrap.style.display = 'none';
+    if (spacer) spacer.style.display = 'none';
 }
 
 function applyGroupConfig() {
@@ -621,11 +629,17 @@ async function uiCreateGroup(e) {
             <input type="text" id="cg-name" placeholder="Nom du groupe *"
                    style="width:100%;border:2px solid #18181b;padding:10px;font-size:13px;margin-bottom:12px;display:block;background:white;box-sizing:border-box;">
 
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:14px;font-weight:900;font-size:12px;text-transform:uppercase;padding:10px;background:white;border:2px solid #18181b;">
-                <input type="checkbox" id="cg-pro" onchange="toggleProFields()"
-                       style="width:20px;height:20px;cursor:pointer;flex-shrink:0;">
+            <div onclick="toggleProFields()" id="cg-pro-label"
+                 style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:14px;
+                        font-weight:900;font-size:12px;text-transform:uppercase;padding:10px;
+                        background:white;border:2px solid #18181b;user-select:none;">
+                <div id="cg-pro-box"
+                     style="width:22px;height:22px;border:2px solid #18181b;flex-shrink:0;
+                            display:flex;align-items:center;justify-content:center;
+                            font-size:16px;font-weight:900;background:white;"></div>
+                <input type="checkbox" id="cg-pro" style="display:none;">
                 Groupe Professionnel (payant)
-            </label>
+            </div>
 
             <div id="cg-pro-fields" style="display:none;border-top:2px solid rgba(0,0,0,0.15);padding-top:12px;margin-bottom:4px;">
                 <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:8px;">Informations entreprise</div>
@@ -654,8 +668,15 @@ async function uiCreateGroup(e) {
 }
 
 function toggleProFields() {
-    const isPro = document.getElementById('cg-pro')?.checked;
+    const cb  = document.getElementById('cg-pro');
+    const box = document.getElementById('cg-pro-box');
+    const lbl = document.getElementById('cg-pro-label');
     const fields = document.getElementById('cg-pro-fields');
+    if (!cb) return;
+    cb.checked = !cb.checked;
+    const isPro = cb.checked;
+    if (box) { box.innerHTML = isPro ? '✕' : ''; box.style.background = isPro ? '#18181b' : 'white'; box.style.color = '#fff'; }
+    if (lbl) { lbl.style.background = isPro ? '#f5f5f5' : 'white'; }
     if (fields) fields.style.display = isPro ? '' : 'none';
 }
 
@@ -689,23 +710,21 @@ async function submitCreateGroup() {
 
     if (res.ok) {
         const newGroup = await res.json();
-        // Créer rayon + postit DEFAUT
+        // Créer uniquement le rayon DEFAUT (conteneur technique invisible en UI)
         try {
-            const resD = await fetchAuth('/api/devices', { method:'POST', body: JSON.stringify({ name:"DEFAUT", groupId: newGroup._id }) });
-            const newDev = await resD.json();
-            await fetchAuth('/api/postits', { method:'POST', body: JSON.stringify({ name:"DEFAUT", deviceId: newDev._id, pickupDate: new Date().toISOString() }) });
-        } catch(e) { console.warn('création défauts:', e); }
+            await fetchAuth('/api/devices', { method:'POST', body: JSON.stringify({ name:"DEFAUT", groupId: newGroup._id }) });
+        } catch(e) { console.warn('rayon DEFAUT:', e); }
         await loadGroups(newGroup._id);
         loadGroupsList();
-        setTimeout(() => { updateVisualHeader(); if (typeof refreshParamsLists==='function') refreshParamsLists(); }, 300);
+        setTimeout(() => { if (typeof refreshParamsLists==='function') refreshParamsLists(); }, 300);
     } else {
         alert('Erreur : ' + await res.text());
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// ÉDITION GROUPE — Modal ⚙️
-// ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// ÉDITION GROUPE ⚙️
+// ═══════════════════════════════════════════════════════
 async function uiEditGroup(groupId) {
     document.getElementById('group-modal')?.remove();
     try {
@@ -717,77 +736,52 @@ async function uiEditGroup(groupId) {
 }
 
 function _openGroupEditModal(groupId, g) {
-    const isPro   = g.isPro   || false;
+    const isPro   = g.isPro || false;
     const isOwner = g.myRole === 'owner';
     const v = (f, def='') => g[f] || def;
-
     const modalHtml = `
     <div id="group-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:14px;overflow-y:auto;">
       <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.4);padding:18px;width:100%;max-width:400px;margin-top:18px;">
         <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:12px;">⚙️ ${v('name','Groupe')}</h3>
-
         <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Nom</div>
-        <input type="text" id="gm-name" value="${v('name')}"
-               style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:9px;background:white;box-sizing:border-box;">
-
+        <input type="text" id="gm-name" value="${v('name')}" style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:9px;background:white;box-sizing:border-box;">
         <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Logo</div>
         ${g.logoUrl ? `<img src="${g.logoUrl}" style="width:38px;height:38px;object-fit:cover;border:2px solid var(--accent);margin-bottom:5px;display:block;">` : ''}
-        <input type="file" id="gm-logo" accept="image/*"
-               style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:5px;font-size:11px;margin-bottom:9px;background:white;box-sizing:border-box;">
-
+        <input type="file" id="gm-logo" accept="image/*" style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:5px;font-size:11px;margin-bottom:9px;background:white;box-sizing:border-box;">
         ${isPro ? `
         <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
           <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">Infos entreprise</div>
-          <input type="text" id="gm-company" value="${v('company')}" placeholder="Société"
-                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
+          <input type="text" id="gm-company" value="${v('company')}" placeholder="Société" style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
           <div style="display:flex;gap:5px;margin-bottom:5px;">
-            <input type="text" id="gm-cp"    value="${v('cp')}"    placeholder="CP"
-                   style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
-            <input type="text" id="gm-ville" value="${v('ville')}" placeholder="Ville"
-                   style="flex:2;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
+            <input type="text" id="gm-cp"    value="${v('cp')}"    placeholder="CP"    style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
+            <input type="text" id="gm-ville" value="${v('ville')}" placeholder="Ville" style="flex:2;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
           </div>
-          <input type="tel"   id="gm-phone" value="${v('phonePro')}" placeholder="Téléphone"
-                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
-          <input type="email" id="gm-email" value="${v('emailPro')}" placeholder="Email"
-                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
-          <input type="text"  id="gm-siret" value="${v('siret')}"   placeholder="SIRET"
-                 style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
+          <input type="tel"   id="gm-phone" value="${v('phonePro')}" placeholder="Téléphone" style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
+          <input type="email" id="gm-email" value="${v('emailPro')}" placeholder="Email"      style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;margin-bottom:5px;background:white;box-sizing:border-box;">
+          <input type="text"  id="gm-siret" value="${v('siret')}"   placeholder="SIRET"      style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
         </div>` : ''}
-
-        <!-- Membres -->
         <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
           <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">${isPro ? 'Membres & Droits' : 'Participants'}</div>
-          <div id="members-matrix-wrap" style="font-size:10px;color:#888;min-height:30px;">Chargement…</div>
+          <div id="members-matrix-wrap" style="font-size:10px;color:#888;min-height:24px;">Chargement…</div>
           <div style="display:flex;gap:5px;margin-top:7px;">
             <input type="email" id="new-member-email" placeholder="${isPro?'Inviter par email…':'Ajouter participant…'}"
                    style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:11px;background:white;box-sizing:border-box;">
-            <button onclick="addMemberToMatrix('${groupId}')"
-                    style="padding:7px 11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;cursor:pointer;">+</button>
+            <button onclick="addMemberToMatrix('${groupId}')" style="padding:7px 11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;cursor:pointer;">+</button>
           </div>
         </div>
-
         ${isOwner ? `<div style="border-top:2px solid rgba(220,38,38,0.15);padding-top:7px;margin-bottom:7px;">
-          <button onclick="confirmDeleteGroup('${groupId}')"
-                  style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️ Supprimer ce groupe</button>
+          <button onclick="confirmDeleteGroup('${groupId}')" style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️ Supprimer ce groupe</button>
         </div>` : ''}
-
         <div style="display:flex;gap:8px;">
-          <button onclick="document.getElementById('group-modal').remove()"
-                  style="flex:1;padding:11px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
-          <button onclick="submitEditGroup('${groupId}')"
-                  style="flex:1;padding:11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Modifier</button>
+          <button onclick="document.getElementById('group-modal').remove()" style="flex:1;padding:11px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+          <button onclick="submitEditGroup('${groupId}')" style="flex:1;padding:11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Modifier</button>
         </div>
       </div>
     </div>`;
-
     document.body.insertAdjacentHTML('beforeend', modalHtml);
-    setTimeout(() => {
-        document.getElementById('gm-name')?.focus();
-        loadMembersMatrix(groupId, isPro);
-    }, 80);
+    setTimeout(() => { document.getElementById('gm-name')?.focus(); loadMembersMatrix(groupId, isPro); }, 80);
 }
 
-// ── Matrice membres ───────────────────────────────────────────────────────────
 async function loadMembersMatrix(groupId, isPro) {
     const wrap = document.getElementById('members-matrix-wrap');
     if (!wrap) return;
@@ -796,15 +790,13 @@ async function loadMembersMatrix(groupId, isPro) {
         if (!res.ok) { wrap.innerHTML = '<em style="opacity:0.4;">Erreur</em>'; return; }
         const members = await res.json();
         if (!members.length) { wrap.innerHTML = '<em style="opacity:0.4;font-size:10px;">Aucun membre</em>'; return; }
-
         if (isPro) {
-            wrap.innerHTML = `<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
-            <table style="width:100%;border-collapse:collapse;font-size:10px;min-width:280px;">
+            wrap.innerHTML = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;min-width:260px;">
               <thead><tr style="border-bottom:2px solid var(--accent);">
                 <th style="text-align:left;padding:4px 2px;font-size:7px;text-transform:uppercase;opacity:0.5;">Email</th>
-                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;min-width:44px;">Admin</th>
-                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;min-width:44px;">Employé</th>
-                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;min-width:44px;">Client</th>
+                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;">Admin</th>
+                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;">Employé</th>
+                <th style="padding:4px 3px;font-size:7px;text-transform:uppercase;opacity:0.5;text-align:center;">Client</th>
                 <th style="width:22px;"></th>
               </tr></thead>
               <tbody>${members.map(m => {
@@ -814,16 +806,13 @@ async function loadMembersMatrix(groupId, isPro) {
                   <td style="text-align:center;padding:4px 3px;"><input type="radio" name="role-${key}" value="admin" ${m.role==='admin'?'checked':''} onchange="setMemberRole('${groupId}','${m.email}','admin')" style="width:16px;height:16px;cursor:pointer;margin:0;accent-color:var(--accent);"></td>
                   <td style="text-align:center;padding:4px 3px;"><input type="radio" name="role-${key}" value="employe" ${m.role==='employe'?'checked':''} onchange="setMemberRole('${groupId}','${m.email}','employe')" style="width:16px;height:16px;cursor:pointer;margin:0;accent-color:var(--accent);"></td>
                   <td style="text-align:center;padding:4px 3px;"><input type="radio" name="role-${key}" value="client" ${m.role==='client'?'checked':''} onchange="setMemberRole('${groupId}','${m.email}','client')" style="width:16px;height:16px;cursor:pointer;margin:0;accent-color:var(--accent);"></td>
-                  <td style="text-align:center;padding:2px;"><button onclick="removeMemberFromMatrix('${groupId}','${m.email}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:15px;line-height:1;padding:2px;">×</button></td>
+                  <td style="text-align:center;"><button onclick="removeMemberFromMatrix('${groupId}','${m.email}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:15px;line-height:1;padding:2px;">×</button></td>
                 </tr>`;
-              }).join('')}</tbody>
-            </table></div>`;
+              }).join('')}</tbody></table></div>`;
         } else {
-            wrap.innerHTML = members.map(m => `
-            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,0.05);">
+            wrap.innerHTML = members.map(m => `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(0,0,0,0.05);">
                 <span style="flex:1;font-size:10px;">${m.email}</span>
-                <button onclick="removeMemberFromMatrix('${groupId}','${m.email}')"
-                        style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:2px;">×</button>
+                <button onclick="removeMemberFromMatrix('${groupId}','${m.email}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:2px;">×</button>
             </div>`).join('');
         }
     } catch(e) { wrap.innerHTML = '<em style="opacity:0.4;font-size:10px;">Erreur</em>'; }
@@ -832,43 +821,27 @@ async function loadMembersMatrix(groupId, isPro) {
 async function addMemberToMatrix(groupId) {
     const email = document.getElementById('new-member-email')?.value?.trim();
     if (!email || !email.includes('@')) return alert('Email invalide.');
-    const isPro = currentGroupConfig?.isPro;
-    const res = await fetchAuth('/api/groups/' + groupId + '/members', {
-        method:'POST', body: JSON.stringify({ email, role: 'client' })
-    });
-    if (res.ok) {
-        document.getElementById('new-member-email').value = '';
-        loadMembersMatrix(groupId, isPro);
-    } else {
-        const t = await res.text();
-        alert(t.includes('déjà') ? 'Déjà membre.' : 'Erreur : ' + t);
-    }
+    const res = await fetchAuth('/api/groups/' + groupId + '/members', { method:'POST', body: JSON.stringify({ email, role: 'client' }) });
+    if (res.ok) { document.getElementById('new-member-email').value = ''; loadMembersMatrix(groupId, currentGroupConfig?.isPro); }
+    else { const t = await res.text(); alert(t.includes('déjà') ? 'Déjà membre.' : 'Erreur : ' + t); }
 }
-
 async function setMemberRole(groupId, email, role) {
-    await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), {
-        method:'PUT', body: JSON.stringify({ role })
-    });
+    await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), { method:'PUT', body: JSON.stringify({ role }) });
 }
-
 async function removeMemberFromMatrix(groupId, email) {
     const res = await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), { method:'DELETE' });
     if (res.ok) loadMembersMatrix(groupId, currentGroupConfig?.isPro);
 }
-
 async function submitEditGroup(groupId) {
     const name = document.getElementById('gm-name')?.value?.trim();
     if (!name) return alert('Le nom est obligatoire.');
-    const isPro = currentGroupConfig?.isPro;
-    const payload = {
-        name,
-        company:  document.getElementById('gm-company')?.value?.trim() || '',
-        cp:       document.getElementById('gm-cp')?.value?.trim()      || '',
-        ville:    document.getElementById('gm-ville')?.value?.trim()   || '',
-        phonePro: document.getElementById('gm-phone')?.value?.trim()   || '',
-        emailPro: document.getElementById('gm-email')?.value?.trim()   || '',
-        siret:    document.getElementById('gm-siret')?.value?.trim()   || '',
-    };
+    const payload = { name,
+        company: document.getElementById('gm-company')?.value?.trim()||'',
+        cp:      document.getElementById('gm-cp')?.value?.trim()||'',
+        ville:   document.getElementById('gm-ville')?.value?.trim()||'',
+        phonePro:document.getElementById('gm-phone')?.value?.trim()||'',
+        emailPro:document.getElementById('gm-email')?.value?.trim()||'',
+        siret:   document.getElementById('gm-siret')?.value?.trim()||'' };
     const logoFile = document.getElementById('gm-logo')?.files?.[0];
     if (logoFile) {
         try {
@@ -883,33 +856,26 @@ async function submitEditGroup(groupId) {
     if (res.ok) { await loadGroups(groupId); loadGroupsList(); }
     else alert('Erreur : ' + await res.text());
 }
-
 function confirmDeleteGroup(groupId) {
     const modal = document.getElementById('group-modal');
     if (!modal) return;
     const inner = modal.querySelector('div');
-    if (inner) inner.innerHTML = `
-      <div style="padding:22px;text-align:center;">
+    if (inner) inner.innerHTML = `<div style="padding:22px;text-align:center;">
         <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
         <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Supprimer ce groupe ?</div>
         <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">Tous les postits et messages seront supprimés.</div>
         <div style="display:flex;gap:8px;">
-          <button onclick="document.getElementById('group-modal').remove()"
-                  style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
-          <button onclick="executeDeleteGroup('${groupId}')"
-                  style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Supprimer</button>
-        </div>
-      </div>`;
+          <button onclick="document.getElementById('group-modal').remove()" style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+          <button onclick="executeDeleteGroup('${groupId}')" style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Supprimer</button>
+        </div></div>`;
 }
-
 async function executeDeleteGroup(groupId) {
     document.getElementById('group-modal')?.remove();
     const res = await fetchAuth('/api/groups/' + groupId, { method:'DELETE' });
     if (res.ok) {
         currentGroupId = null; currentGroupConfig = null;
         localStorage.removeItem('currentGroupId');
-        await loadGroups();
-        loadGroupsList();
+        await loadGroups(); loadGroupsList();
     } else alert('Erreur : ' + await res.text());
 }
 
@@ -1154,45 +1120,7 @@ async function loadGroups(idToSelect = null) {
             sel.value = targetId;
             if (!currentGroupId) { currentGroupId = targetId; localStorage.setItem('currentGroupId', targetId); }
 
-            // --- VÉRIFICATION / CRÉATION RAYON PAR DÉFAUT ---
-            const resDev = await fetchAuth(`/api/devices?groupId=${targetId}`);
-            let devs = await resDev.json();
-
-            // Création auto uniquement si proprio (pas pour les membres)
-            const isOwner = !currentGroupConfig || currentGroupConfig.myRole === 'owner';
-            if (devs.length === 0 && isOwner) {
-                console.log("🛠️ Création du rayon DEFAUT automatique...");
-                const resNewDev = await fetchAuth('/api/devices', {
-                    method: 'POST',
-                    body: JSON.stringify({ name: "DEFAUT", groupId: targetId})
-                });
-                const newDev = await resNewDev.json();
-                devs = [newDev];
-            }
-            if (devs.length === 0) {
-                // Membre sans device visible → on continue sans créer
-                await loadGroupData(targetId);
-                return;
-            }
-
-            // --- VÉRIFICATION / CRÉATION POST-IT PAR DÉFAUT ---
-            const firstDevId = devs[0]._id;
-            const resPos = await fetchAuth(`/api/postits?deviceId=${firstDevId}`);
-            let postits = await resPos.json();
-
-            if (postits.length === 0 && isOwner) {
-                console.log("🛠️ Création du post-it DEFAUT automatique...");
-                await fetchAuth('/api/postits', {
-                    method: 'POST',
-                    body: JSON.stringify({ 
-                        name: "DEFAUT", 
-                        deviceId: firstDevId, 
-                        pickupDate: new Date().toISOString()
-                    })
-                });
-            }
-
-            // Chargement complet (rayons + post-its + header)
+            // Charger les données du groupe
             await loadGroupData(targetId);
             
         } else if (sel) {
@@ -1226,7 +1154,7 @@ let currentPostitId = null;
 // Cache des postits du groupe courant
 let _cachedPostits = [];
 
-// ── Rendu tuiles postits dans l'entête ───────────────────────────────────────
+// ── Rendu de la rangée de tuiles ─────────────────────────────────────────────
 function renderPostitTabs(postits, selectedId) {
     const wrap = document.getElementById('header-postit-tabs');
     const hiddenWrap = document.getElementById('postit-tabs');
@@ -1438,14 +1366,18 @@ async function uiEditPostit(postitId) {
                 </div>
             </div>` : ''}
 
-            <!-- Inviter un participant -->
+            <!-- Participants invités sur ce postit -->
             <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:10px;margin-bottom:10px;">
-                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:4px;">Inviter un participant</div>
+                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">Participants de ce postit</div>
+                <div id="pe-invites-list" style="min-height:20px;margin-bottom:6px;">
+                    <em style="opacity:0.4;font-size:10px;">Chargement…</em>
+                </div>
+                <div style="font-size:7px;opacity:0.4;margin-bottom:5px;">⚠️ Chaque invité voit uniquement ce postit, pas les autres.</div>
                 <div style="display:flex;gap:6px;">
-                    <input type="email" id="pe-invite-email" placeholder="email@exemple.fr"
-                           style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                    <input type="email" id="pe-invite-email" placeholder="Inviter par email…"
+                           style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
                     <button onclick="submitInviteToPostit('${postitId}')"
-                            style="padding:8px 10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">+</button>
+                            style="padding:7px 10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">+</button>
                 </div>
             </div>
 
@@ -1461,6 +1393,8 @@ async function uiEditPostit(postitId) {
     </div>`;
 
     document.body.insertAdjacentHTML('beforeend', modalHtml);
+    // Charger les invités du postit
+    setTimeout(() => loadPostitInvites(postitId), 80);
 }
 
 async function submitEditPostit(postitId) {
@@ -1490,19 +1424,45 @@ async function submitInviteToPostit(postitId) {
     const email = document.getElementById('pe-invite-email')?.value?.trim();
     if (!email || !email.includes('@')) return alert('Email invalide.');
 
-    // Inviter dans le groupe comme 'client'
-    const res = await fetchAuth('/api/groups/' + currentGroupId + '/members', {
+    // Inviter sur ce postit spécifiquement (accès postit-level)
+    // Le serveur ajoute aussi la personne comme membre du groupe si pas encore dedans
+    const res = await fetchAuth('/api/postits/' + postitId + '/invite', {
         method: 'POST',
-        body: JSON.stringify({ email, role: 'client' })
+        body: JSON.stringify({ email })
     });
     if (res.ok) {
         document.getElementById('pe-invite-email').value = '';
-        alert('✅ ' + email + ' invité(e) dans le groupe.');
+        // Recharger la liste des invités
+        loadPostitInvites(postitId);
     } else {
         const txt = await res.text();
-        if (txt.includes('déjà')) alert('Cet email est déjà membre.');
-        else alert('Erreur : ' + txt);
+        alert('Erreur : ' + txt);
     }
+}
+
+async function loadPostitInvites(postitId) {
+    const wrap = document.getElementById('pe-invites-list');
+    if (!wrap) return;
+    try {
+        const res = await fetchAuth('/api/postits/' + postitId + '/invites');
+        if (!res.ok) return;
+        const emails = await res.json();
+        if (!emails.length) {
+            wrap.innerHTML = '<em style="opacity:0.4;font-size:10px;">Aucun invité</em>';
+            return;
+        }
+        wrap.innerHTML = emails.map(email => `
+            <div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid rgba(0,0,0,0.05);">
+                <span style="flex:1;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${email}</span>
+                <button onclick="removePostitInvite('${postitId}','${email}')"
+                        style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:15px;padding:2px;flex-shrink:0;">×</button>
+            </div>`).join('');
+    } catch(e) {}
+}
+
+async function removePostitInvite(postitId, email) {
+    const res = await fetchAuth('/api/postits/' + postitId + '/invite/' + encodeURIComponent(email), { method:'DELETE' });
+    if (res.ok) loadPostitInvites(postitId);
 }
 
 function confirmDeletePostit(postitId) {
@@ -1575,27 +1535,7 @@ async function loadGroupData(groupId) {
             const resPos = await fetchAuth(url);
             let allPostits = await resPos.json();
 
-            // --- CRÉATION POST-IT PAR DÉFAUT si AUCUN postit brut (avant filtre) ---
-            if (!allPostits || allPostits.length === 0) {
-                const canCreate = !currentGroupConfig || 
-                    currentGroupConfig.myRole === 'owner' || 
-                    currentGroupConfig.myRole === 'admin';
-                if (canCreate) {
-                    console.log("🛠️ Création post-it DEFAUT automatique pour rayon", selDev.value);
-                    await fetchAuth('/api/postits', {
-                        method: 'POST',
-                        body: JSON.stringify({ 
-                            name: "DEFAUT", 
-                            deviceId: selDev.value, 
-                            pickupDate: new Date().toISOString()
-                        })
-                    });
-                    const resPos2 = await fetchAuth(`/api/postits?deviceId=${selDev.value}`);
-                    allPostits = await resPos2.json();
-                }
-            }
-
-            // Appliquer le filtre de statut APRÈS la vérification de création
+            // Appliquer le filtre de statut
             let postits = [...allPostits];
             if (typeof showFinished !== 'undefined') {
                 if (showFinished) {

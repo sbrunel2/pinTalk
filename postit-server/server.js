@@ -104,14 +104,18 @@ const Device = mongoose.model('Device', {
 
 const Postit = mongoose.model('Postit', { 
     deviceId: String, 
-    ownerEmail: String, // <--- AJOUTÉ : Pour que les clients soient privés
+    ownerEmail: String,
     name: String,        
     orderNumber: String, 
-    phone: String,       
+    phone: String,
+    email: String,
     pickupDate: String,  
     status: { type: String, default: 'En attente' },
     isLocked: { type: Boolean, default: false },
-	imageUrl: String
+    imageUrl: String,
+    // allowedEmails : si non vide, seuls ces emails + owner + admins/employés peuvent voir ce postit
+    // Si vide → visible par tous les membres du groupe (comportement par défaut)
+    allowedEmails: { type: [String], default: [] }
 });
 
 const Message = mongoose.model('Message', { 
@@ -539,24 +543,37 @@ app.get('/api/postits', async (req, res) => {
         const group = await Group.findById(device.groupId);
         if (!group) return res.json([]);
 
-        // Règles de visibilité des postits :
-        // - Proprio, Admin, Employé → voient TOUS les postits
-        // - Client (groupe PRO) → voit uniquement ses propres postits
-        // - Participant (groupe PERSO) → voit TOUS les postits
-        if (group.ownerEmail !== userEmail) {
+        // ── Règles de visibilité des postits ────────────────────────────────
+        // Déterminer le rôle de l'utilisateur dans ce groupe
+        let userRole = null;
+        if (group.ownerEmail === userEmail) {
+            userRole = 'owner';
+        } else {
             const perm = await Permission.findOne({
                 groupId: group._id.toString(),
                 guestEmail: userEmail
             });
+            userRole = perm ? perm.role : null;
+        }
 
-            if (!perm) {
-                // Aucune permission : ne voir que ses propres postits
-                query.ownerEmail = userEmail;
-            } else if (group.isPro && perm.role === 'client') {
-                // Groupe PRO + rôle client : ne voir que ses propres postits
-                query.ownerEmail = userEmail;
+        const isPrivileged = ['owner', 'admin', 'employe'].includes(userRole);
+
+        // Owner, admin, employé → voient TOUS les postits sans restriction
+        if (!isPrivileged) {
+            // Client ou participant (perso) :
+            // Ne voir que les postits où :
+            //   - allowedEmails est vide (postit "public" dans le groupe) ET ownerEmail === userEmail (son propre postit)
+            //   - OU allowedEmails contient son email (invité explicitement)
+            //   - OU il est le owner du postit
+            query.$or = [
+                { ownerEmail: userEmail },
+                { allowedEmails: userEmail },
+            ];
+            // Pour les groupes PRO, les clients ne voient que leurs propres postits
+            // sauf s'ils ont été explicitement invités sur un postit d'un autre
+            if (group.isPro && userRole === 'client') {
+                // Déjà couvert par le $or ci-dessus
             }
-            // Admin, employé, participant (perso) → voient tout (pas de filtre ownerEmail)
         }
 
         // 4. Exécution avec ton tri par date
@@ -634,6 +651,16 @@ app.post('/api/postits', async (req, res) => {
         }
 
         // 3. Création du Post-it "tatoué" avec l'email du Token
+        // Pour les groupes PERSO : récupérer les membres existants pour les ajouter dans allowedEmails
+        let allowedEmails = [];
+        if (device) {
+            const group = await Group.findById(device.groupId);
+            if (group && !group.isPro) {
+                const perms = await Permission.find({ groupId: group._id.toString() });
+                allowedEmails = perms.map(p => p.guestEmail);
+            }
+        }
+
         const postit = new Postit({
             deviceId,
             name,
@@ -641,7 +668,8 @@ app.post('/api/postits', async (req, res) => {
             phone,
             pickupDate,
             ownerEmail: userEmail,
-            status: 'En attente'
+            status: 'En attente',
+            allowedEmails
         });
 
         const saved = await postit.save();
@@ -839,6 +867,18 @@ app.post('/api/groups/:id/members', async (req, res) => {
         const perm = new Permission({ groupId, guestEmail: email, role: finalRole });
         await perm.save();
 
+        // Pour les groupes PERSO : ajouter le nouveau membre dans allowedEmails de tous les postits du groupe
+        if (!group.isPro) {
+            try {
+                const devices = await Device.find({ groupId });
+                const deviceIds = devices.map(d => d._id.toString());
+                await Postit.updateMany(
+                    { deviceId: { $in: deviceIds }, allowedEmails: { $ne: email } },
+                    { $push: { allowedEmails: email } }
+                );
+            } catch(e) { console.warn('Erreur sync allowedEmails membres:', e.message); }
+        }
+
         console.log(`[INVITE] ${email} ajouté dans groupe ${group.name} en tant que ${finalRole}`);
         res.json({ email, role: finalRole });
     } catch (err) {
@@ -1006,6 +1046,92 @@ app.delete('/api/devices/:id', async (req, res) => {
         res.status(500).send("Erreur serveur lors de la suppression");
     }
 });
+
+// ── Inviter / retirer un email sur un postit (accès postit-level) ────────────
+// POST /api/postits/:id/invite  { email }
+// DELETE /api/postits/:id/invite/:email
+app.post('/api/postits/:id/invite', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const { email } = req.body;
+        if (!email) return res.status(400).send('Email requis');
+
+        const postit = await Postit.findById(req.params.id);
+        if (!postit) return res.status(404).send('Postit introuvable');
+
+        // Seul le owner du postit, ou owner/admin du groupe peut inviter
+        const device = await Device.findById(postit.deviceId);
+        const group  = device ? await Group.findById(device.groupId) : null;
+        let canInvite = postit.ownerEmail === userEmail;
+        if (!canInvite && group) {
+            if (group.ownerEmail === userEmail) canInvite = true;
+            else {
+                const perm = await Permission.findOne({ groupId: group._id.toString(), guestEmail: userEmail });
+                if (perm && ['admin'].includes(perm.role)) canInvite = true;
+            }
+        }
+        if (!canInvite) return res.status(403).send('Accès refusé');
+
+        // Ajouter email à allowedEmails (éviter doublons)
+        if (!postit.allowedEmails.includes(email)) {
+            postit.allowedEmails.push(email);
+            await postit.save();
+        }
+
+        // Ajouter la personne comme membre du groupe si pas encore dedans (rôle client)
+        if (group && group.ownerEmail !== email) {
+            const existPerm = await Permission.findOne({ groupId: group._id.toString(), guestEmail: email });
+            if (!existPerm) {
+                await Permission.create({ groupId: group._id.toString(), guestEmail: email, role: 'client' });
+            }
+        }
+
+        res.json({ ok: true, allowedEmails: postit.allowedEmails });
+    } catch(err) {
+        console.error('Erreur invite postit:', err);
+        res.status(500).send('Erreur serveur');
+    }
+});
+
+app.delete('/api/postits/:id/invite/:email', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const emailToRemove = decodeURIComponent(req.params.email);
+
+        const postit = await Postit.findById(req.params.id);
+        if (!postit) return res.status(404).send('Postit introuvable');
+
+        // Même vérification de droit
+        const device = await Device.findById(postit.deviceId);
+        const group  = device ? await Group.findById(device.groupId) : null;
+        let canEdit = postit.ownerEmail === userEmail;
+        if (!canEdit && group) {
+            if (group.ownerEmail === userEmail) canEdit = true;
+            else {
+                const perm = await Permission.findOne({ groupId: group._id.toString(), guestEmail: userEmail });
+                if (perm && ['admin'].includes(perm.role)) canEdit = true;
+            }
+        }
+        if (!canEdit) return res.status(403).send('Accès refusé');
+
+        postit.allowedEmails = postit.allowedEmails.filter(e => e !== emailToRemove);
+        await postit.save();
+        res.json({ ok: true, allowedEmails: postit.allowedEmails });
+    } catch(err) {
+        console.error('Erreur remove invite postit:', err);
+        res.status(500).send('Erreur serveur');
+    }
+});
+
+// GET /api/postits/:id/invites — lister les emails invités
+app.get('/api/postits/:id/invites', authenticateToken, async (req, res) => {
+    try {
+        const postit = await Postit.findById(req.params.id);
+        if (!postit) return res.status(404).send('Postit introuvable');
+        res.json(postit.allowedEmails || []);
+    } catch(err) { res.status(500).send('Erreur serveur'); }
+});
+
 
 app.delete('/api/postits/:id', async (req, res) => {
     await Postit.findByIdAndDelete(req.params.id);

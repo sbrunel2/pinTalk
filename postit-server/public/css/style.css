@@ -6,13 +6,12 @@
 html, body { background: var(--bg); overflow: hidden; height: 100%; position: fixed; width: 100%; font-family: sans-serif; }
 
 .fixed-header { 
-    position: absolute; top: 0; left: 0; width: 100%; 
-    background: var(--bg); z-index: 2000; padding: 10px 15px; border-bottom: 2px solid var(--accent);
+    position: fixed; top: 0; left: 0; width: 100%; 
+    background: var(--bg); z-index: 2000; padding: 8px 12px; border-bottom: 2px solid var(--accent);
     display: flex; flex-direction: column; justify-content: center;
-    transition: max-height 0.25s ease;
 }
 .fixed-header.collapsed #header-details { display: none !important; }
-.fixed-header.collapsed { padding-bottom: 10px; }
+.fixed-header.collapsed { padding-bottom: 8px; }
 
 .fixed-header .flex-col {
     display: flex;
@@ -44,12 +43,12 @@ html, body { background: var(--bg); overflow: hidden; height: 100%; position: fi
     height: 100%; 
     overflow-y: auto; 
     -webkit-overflow-scrolling: touch; 
-    padding: 105px 20px 140px 20px !important; 
+    padding: 80px 16px 140px 16px !important; 
     position: relative;
     flex-shrink: 0;
 }
 .fixed-header.collapsed ~ #viewport .page { 
-    padding-top: 60px !important; 
+    padding-top: 52px !important; 
 }
 
 input, select, textarea { 

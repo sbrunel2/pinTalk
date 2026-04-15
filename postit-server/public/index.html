@@ -23,27 +23,30 @@
 
 <!-- HEADER FIXE (réductible) -->
 <div class="fixed-header" id="fixed-header">
-    <!-- Ligne principale : titre OU tuiles postits | bouton ⏏ -->
-    <div style="display:flex; align-items:center; width:100%; gap:6px; min-height:44px;">
-        <!-- Titre de page (masqué sur le chat) -->
-        <div style="flex-shrink:0; display:flex; align-items:center; gap:5px; cursor:pointer;" onclick="toggleHeader()">
+    <!-- Ligne principale : titre | tuiles postits | bouton ⏏ -->
+    <div style="display:flex; align-items:center; width:100%; gap:6px; min-height:40px;">
+        <!-- Titre de page (masqué sur le chat) — cliquable pour replier -->
+        <div id="header-title-wrap" style="flex-shrink:0; display:flex; align-items:center; gap:5px; cursor:pointer;" onclick="toggleHeader()">
             <h2 id="page-title" class="font-black italic uppercase" style="margin:0; font-size:15px; white-space:nowrap;">Groupes</h2>
             <span id="header-toggle-icon" style="font-size:11px; opacity:0.35;">▲</span>
         </div>
-        <!-- Tuiles postits dans l'entête (visibles seulement sur page Chat) -->
+        <!-- Tuiles postits (page Chat uniquement) -->
         <div id="header-postit-tabs"
              style="flex:1; display:none; overflow-x:auto; -webkit-overflow-scrolling:touch;
-                    scrollbar-width:none; gap:5px;">
+                    scrollbar-width:none; gap:5px; align-items:stretch; min-width:0;">
         </div>
-        <!-- Bouton déconnexion -->
+        <!-- Espace flexible pour pousser ⏏ à droite sur pages non-chat -->
+        <div id="header-spacer" style="flex:1;"></div>
+        <!-- Bouton déconnexion toujours à droite -->
         <button onclick="logout()"
                 style="flex-shrink:0; font-size:15px; background:var(--accent); color:white;
-                       border:none; cursor:pointer; padding:5px 8px;">⏏</button>
+                       border:none; cursor:pointer; padding:5px 9px; margin-left:4px;">⏏</button>
     </div>
-    <!-- Ligne masquable : nom utilisateur -->
-    <div id="header-details" style="width:100%; padding-top:3px; border-top:1px solid rgba(0,0,0,0.08); cursor:pointer;" onclick="toggleHeader()">
-        <div id="user-badge" style="font-size:8px; font-weight:900; opacity:0.35; text-transform:uppercase;">
-            👤 <span id="user-name-display">...</span>
+    <!-- Ligne masquable : nom utilisateur connecté -->
+    <div id="header-details" style="width:100%; padding-top:3px; border-top:1px solid rgba(0,0,0,0.08);">
+        <div id="user-badge" style="font-size:8px; font-weight:900; opacity:0.45; text-transform:uppercase; cursor:pointer;" onclick="toggleHeader()">
+            👤 <span id="user-name-display">…</span>
+            <span id="header-toggle-icon2" style="opacity:0.4; margin-left:4px; font-size:10px;">▲</span>
         </div>
     </div>
 </div>
