@@ -59,11 +59,115 @@ function applyCustomColors() {
         document.documentElement.style.setProperty(k, v);
         localStorage.setItem(k, v);
     });
+
+    // Police
+    const font     = document.getElementById('c-font')?.value     || 'sans-serif';
+    const fontSize = document.getElementById('c-fontsize')?.value || '14';
+    const border   = document.getElementById('c-border')?.value   || '2';
+    const radius   = document.getElementById('c-radius')?.value   || '0';
+
+    document.documentElement.style.setProperty('--font-family', font);
+    document.documentElement.style.setProperty('--font-size',   fontSize + 'px');
+    document.documentElement.style.setProperty('--border-w',    border + 'px');
+    document.documentElement.style.setProperty('--tile-radius', radius + 'px');
+
+    localStorage.setItem('customFont', font);
+    localStorage.setItem('customFontSize', fontSize);
+    localStorage.setItem('customBorder', border);
+    localStorage.setItem('customRadius', radius);
+
+    // Appliquer bordure dynamique aux inputs et sélecteurs
+    document.querySelectorAll('input:not([type=range]):not([type=color]):not([type=file]):not([type=checkbox]):not([type=radio]), select, textarea').forEach(el => {
+        el.style.borderWidth = border + 'px';
+    });
+}
+
+// ── Mesure hauteur header → CSS var ──────────────────────────
+function measureHeaderHeight() {
+    const hdr = document.getElementById('fixed-header');
+    if (!hdr) return;
+    const h = hdr.offsetHeight + 4;
+    document.documentElement.style.setProperty('--header-h', h + 'px');
+}
+
+// Observer les changements de taille du header (replié/déployé)
+const _hdrObserver = new ResizeObserver(() => measureHeaderHeight());
+document.addEventListener('DOMContentLoaded', () => {
+    const hdr = document.getElementById('fixed-header');
+    if (hdr) _hdrObserver.observe(hdr);
+});
+
+// ── Profil utilisateur ────────────────────────────────────────
+async function loadProfile() {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    if (user.firstname) document.getElementById('prof-firstname')?.setAttribute('value', user.firstname);
+    if (user.lastname)  document.getElementById('prof-lastname')?.setAttribute('value', user.lastname);
+    if (user.email)     { const el = document.getElementById('prof-email'); if(el) el.value = user.email; }
+    if (user.phone)     { const el = document.getElementById('prof-phone'); if(el) el.value = user.phone; }
+    if (user.lang)      { const el = document.getElementById('prof-lang'); if(el) el.value = user.lang; }
+}
+
+async function saveProfile() {
+    const payload = {
+        firstname: document.getElementById('prof-firstname')?.value?.trim() || '',
+        lastname:  document.getElementById('prof-lastname')?.value?.trim()  || '',
+        phone:     document.getElementById('prof-phone')?.value?.trim()     || '',
+        lang:      document.getElementById('prof-lang')?.value              || 'fr',
+    };
+    try {
+        const res = await fetchAuth('/api/user/profile', { method:'PUT', body: JSON.stringify(payload) });
+        if (res.ok) {
+            const user = JSON.parse(localStorage.getItem('user') || '{}');
+            Object.assign(user, payload);
+            localStorage.setItem('user', JSON.stringify(user));
+            setUserDisplay();
+            alert('✅ Profil enregistré.');
+        } else alert('Erreur : ' + await res.text());
+    } catch(e) { alert('Erreur réseau'); }
+}
+
+async function changePassword() {
+    const cur = document.getElementById('prof-pwd-cur')?.value;
+    const nw  = document.getElementById('prof-pwd-new')?.value;
+    if (!cur || !nw) return alert('Remplissez les deux champs.');
+    if (nw.length < 6) return alert('Minimum 6 caractères.');
+    try {
+        const res = await fetchAuth('/api/user/password', { method:'PUT', body: JSON.stringify({ currentPassword: cur, newPassword: nw }) });
+        if (res.ok) { alert('✅ Mot de passe modifié.'); document.getElementById('prof-pwd-cur').value=''; document.getElementById('prof-pwd-new').value=''; }
+        else alert('Erreur : ' + await res.text());
+    } catch(e) { alert('Erreur réseau'); }
+}
+
+function applyLang(lang) {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    user.lang = lang;
+    localStorage.setItem('user', JSON.stringify(user));
+    localStorage.setItem('lang', lang);
+    // Stub : rechargement simple pour l'instant (à étendre avec i18n)
+    console.log('[Lang] Langue sélectionnée:', lang);
+}
+
+function applyBgImage(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const url = e.target.result;
+        document.body.style.backgroundImage = `url(${url})`;
+        document.body.classList.add('has-bg-image');
+        localStorage.setItem('customBgImage', url);
+    };
+    reader.readAsDataURL(file);
+}
+
+function removeBgImage() {
+    document.body.style.backgroundImage = '';
+    document.body.classList.remove('has-bg-image');
+    localStorage.removeItem('customBgImage');
 }
 
 function initSkin() {
     const n = parseInt(localStorage.getItem('activeSkin') || '0');
-    // Restaurer les couleurs perso
     const defaults = {
         '--custom-bg':'#efeee9','--custom-accent':'#18181b','--custom-text':'#18181b',
         '--custom-field':'#ffffff','--custom-btn-bg':'#18181b','--custom-btn-text':'#ffffff'
@@ -78,6 +182,25 @@ function initSkin() {
         const picker = document.getElementById(pickerMap[k]);
         if (picker) picker.value = val;
     });
+
+    // Restaurer police, taille, bordure, arrondi
+    const font     = localStorage.getItem('customFont')     || 'sans-serif';
+    const fontSize = localStorage.getItem('customFontSize') || '14';
+    const border   = localStorage.getItem('customBorder')   || '2';
+    const radius   = localStorage.getItem('customRadius')   || '0';
+    document.documentElement.style.setProperty('--font-family', font);
+    document.documentElement.style.setProperty('--font-size',   fontSize + 'px');
+    document.documentElement.style.setProperty('--border-w',    border + 'px');
+    document.documentElement.style.setProperty('--tile-radius', radius + 'px');
+    const fontEl   = document.getElementById('c-font');     if(fontEl)   fontEl.value = font;
+    const fsEl     = document.getElementById('c-fontsize'); if(fsEl)     { fsEl.value = fontSize; const sp = document.getElementById('font-size-val'); if(sp) sp.textContent = fontSize; }
+    const bdEl     = document.getElementById('c-border');   if(bdEl)     { bdEl.value = border;   const sp = document.getElementById('border-val');    if(sp) sp.textContent = border; }
+    const rdEl     = document.getElementById('c-radius');   if(rdEl)     { rdEl.value = radius;   const sp = document.getElementById('radius-val');    if(sp) sp.textContent = radius; }
+
+    // Restaurer image de fond
+    const bgImg = localStorage.getItem('customBgImage');
+    if (bgImg) { document.body.style.backgroundImage = `url(${bgImg})`; document.body.classList.add('has-bg-image'); }
+
     applySkin(n);
 }
 
@@ -591,6 +714,8 @@ async function initApp() {
     applyHeaderState();
     setUserDisplay();
     initSkin();
+    measureHeaderHeight();
+    loadProfile();
     await loadGroups();
     await refreshParamsLists();
     // Restaurer la config UI du dernier groupe visité

@@ -306,3 +306,38 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
     text-transform: uppercase;
     user-select: none;
 }
+
+/* ── Variables dynamiques header & tuiles ──────────────────── */
+:root {
+    --header-h: 80px;
+    --tile-radius: 0px;
+    --border-w: 2px;
+    --font-size: 14px;
+    --font-family: sans-serif;
+}
+
+/* Appliquer la hauteur header aux pages */
+#p0, #p1, #p2, #p3 {
+    padding-top: var(--header-h) !important;
+}
+#p3 { padding-top: var(--header-h) !important; }
+
+/* Arrondi tuiles dynamique */
+body { font-family: var(--font-family); font-size: var(--font-size); }
+#groups-grid [id^="tile-"],
+#header-postit-tabs > div {
+    border-radius: var(--tile-radius) !important;
+}
+#acc-eink .acc-content #eink-sim,
+.acc-content #eink-sim {
+    height: 90px !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid rgba(0,0,0,0.15) !important;
+    border-radius: 8px !important;
+}
+
+/* ── Image de fond ─────────────────────────────────────────── */
+body.has-bg-image { background-attachment: fixed; background-size: cover; background-position: center; }
+body.has-bg-image .page, body.has-bg-image .fixed-header { background: transparent; }
+body.has-bg-image .fixed-header { background: rgba(255,255,255,0.85); backdrop-filter: blur(4px); }

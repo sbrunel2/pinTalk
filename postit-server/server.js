@@ -281,6 +281,37 @@ app.use('/api', (req, res, next) => {
     return authenticateToken(req, res, next);
 });
 
+// ── Profil utilisateur ─────────────────────────────────────────────────────
+app.put('/api/user/profile', authenticateToken, async (req, res) => {
+    try {
+        const { firstname, lastname, phone, lang } = req.body;
+        const user = await User.findById(req.user._id || req.user.id);
+        if (!user) return res.status(404).send('Utilisateur introuvable');
+        if (firstname !== undefined) user.firstname = firstname;
+        if (lastname  !== undefined) user.lastname  = lastname;
+        if (phone     !== undefined) user.phone     = phone;
+        if (lang      !== undefined) user.lang      = lang;
+        await user.save();
+        res.json({ ok: true });
+    } catch(e) { res.status(500).send('Erreur serveur'); }
+});
+
+app.put('/api/user/password', authenticateToken, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword) return res.status(400).send('Champs manquants');
+        const user = await User.findById(req.user._id || req.user.id);
+        if (!user) return res.status(404).send('Utilisateur introuvable');
+        const bcrypt = require('bcryptjs');
+        const valid = await bcrypt.compare(currentPassword, user.password);
+        if (!valid) return res.status(403).send('Mot de passe actuel incorrect');
+        user.password = await bcrypt.hash(newPassword, 10);
+        await user.save();
+        res.json({ ok: true });
+    } catch(e) { res.status(500).send('Erreur serveur'); }
+});
+
+
 app.get('/api/fix-groups', async (req, res) => {
     const email = req.query.email;
     // On donne tous les groupes sans propriétaire à cet email
