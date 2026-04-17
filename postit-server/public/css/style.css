@@ -71,8 +71,8 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 .msg-row.me { justify-content: flex-end; }
 .msg-row.others { justify-content: flex-start; }
 .msg-bubble { max-width: 85%; padding: 6px 10px; font-size: 13px; border: 1.5px solid var(--accent); display: flex; align-items: center; gap: 8px; }
-.msg-row.me .msg-bubble { background: var(--accent); color: #fff; border-radius: 12px 0 12px 0 !important; }
-.msg-row.others .msg-bubble { background: #fff; color: var(--accent); border-radius: 0 12px 0 12px !important; }
+.msg-row.me .msg-bubble { background: var(--bubble-me-bg, var(--accent)); color: var(--bubble-me-text, #fff); border-radius: 12px 0 12px 0 !important; }
+.msg-row.others .msg-bubble { background: var(--bubble-other-bg, #fff); color: var(--bubble-other-text, var(--accent)); border-radius: 0 12px 0 12px !important; }
 
 .msg-author-tag { font-size: 7px; font-weight: 900; text-transform: uppercase; padding: 2px 4px; border-radius: 2px !important; }
 .msg-row.me .msg-author-tag { background: #fff; color: var(--accent); }
@@ -314,6 +314,10 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
     --border-w: 2px;
     --font-size: 14px;
     --font-family: sans-serif;
+    --bubble-me-bg:     #18181b;
+    --bubble-me-text:   #ffffff;
+    --bubble-other-bg:  #ffffff;
+    --bubble-other-text:#18181b;
 }
 
 /* Appliquer la hauteur header aux pages */

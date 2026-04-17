@@ -83,7 +83,14 @@ const groupSchema = new mongoose.Schema({
     stripeSubscriptionId: String,
     subscriptionStatus:   { type: String, default: 'inactive' }, // inactive | active | past_due
     // Groupe créé automatiquement à l'inscription ?
-    isDefault:  { type: Boolean, default: false }
+    isDefault:  { type: Boolean, default: false },
+    // Personnalisation visuelle
+    logoUrl:    String,
+    tileColor:  { type: String, default: '' },
+    tileTextColor: { type: String, default: '' },
+    tileShape:  { type: String, default: 'rect' }, // rect | rounded | circle
+    tileFontFamily: { type: String, default: '' },
+    tileFontSize:   { type: String, default: '' },
 });
 const Group = mongoose.model('Group', groupSchema);
 
@@ -392,7 +399,12 @@ app.get('/api/groups/:id/config', async (req, res) => {
             maxPostits: group.isPro ? 0 : 5,
             myRole,
             joinCode: isOwner ? group.joinCode : null,
-            logoUrl:  group.logoUrl  || null,
+            logoUrl:       group.logoUrl       || null,
+            tileColor:     group.tileColor     || '',
+            tileTextColor: group.tileTextColor || '',
+            tileShape:     group.tileShape     || 'rect',
+            tileFontFamily:group.tileFontFamily|| '',
+            tileFontSize:  group.tileFontSize  || '',
             company:  group.company  || null,
             addr1:    group.addr1    || null,
             addr2:    group.addr2    || null,
@@ -456,7 +468,8 @@ app.put('/api/groups/:id', async (req, res) => {
         if (!group) return res.status(404).send("Groupe introuvable");
         if (group.ownerEmail !== userEmail) return res.status(403).send("Accès refusé");
 
-        const { name, siret, phonePro, emailPro, company, addr1, addr2, cp, ville, logoUrl } = req.body;
+        const { name, siret, phonePro, emailPro, company, addr1, addr2, cp, ville,
+                logoUrl, tileColor, tileTextColor, tileShape, tileFontFamily, tileFontSize } = req.body;
         if (name) group.name = name;
         if (siret    !== undefined) group.siret    = siret;
         if (phonePro !== undefined) group.phonePro = phonePro;
@@ -466,7 +479,12 @@ app.put('/api/groups/:id', async (req, res) => {
         if (addr2    !== undefined) group.addr2    = addr2;
         if (cp       !== undefined) group.cp       = cp;
         if (ville    !== undefined) group.ville    = ville;
-        if (logoUrl  !== undefined) group.logoUrl  = logoUrl;
+        if (logoUrl       !== undefined) group.logoUrl       = logoUrl;
+        if (tileColor     !== undefined) group.tileColor     = tileColor;
+        if (tileTextColor !== undefined) group.tileTextColor = tileTextColor;
+        if (tileShape     !== undefined) group.tileShape     = tileShape;
+        if (tileFontFamily!== undefined) group.tileFontFamily= tileFontFamily;
+        if (tileFontSize  !== undefined) group.tileFontSize  = tileFontSize;
         await group.save();
         res.sendStatus(200);
     } catch (err) {

@@ -76,7 +76,21 @@ function applyCustomColors() {
     localStorage.setItem('customBorder', border);
     localStorage.setItem('customRadius', radius);
 
-    // Appliquer bordure dynamique aux inputs et sélecteurs
+    // Couleurs bulles de conversation
+    const bubbleMeBg    = document.getElementById('c-bubble-me-bg')?.value    || '#18181b';
+    const bubbleMeText  = document.getElementById('c-bubble-me-text')?.value  || '#ffffff';
+    const bubbleOtherBg = document.getElementById('c-bubble-other-bg')?.value || '#ffffff';
+    const bubbleOtherText=document.getElementById('c-bubble-other-text')?.value|| '#18181b';
+    document.documentElement.style.setProperty('--bubble-me-bg',     bubbleMeBg);
+    document.documentElement.style.setProperty('--bubble-me-text',   bubbleMeText);
+    document.documentElement.style.setProperty('--bubble-other-bg',  bubbleOtherBg);
+    document.documentElement.style.setProperty('--bubble-other-text',bubbleOtherText);
+    localStorage.setItem('bubbleMeBg',     bubbleMeBg);
+    localStorage.setItem('bubbleMeText',   bubbleMeText);
+    localStorage.setItem('bubbleOtherBg',  bubbleOtherBg);
+    localStorage.setItem('bubbleOtherText',bubbleOtherText);
+
+    // Appliquer bordure dynamique
     document.querySelectorAll('input:not([type=range]):not([type=color]):not([type=file]):not([type=checkbox]):not([type=radio]), select, textarea').forEach(el => {
         el.style.borderWidth = border + 'px';
     });
@@ -166,6 +180,22 @@ async function changePassword() {
 
 // applyLang et t() définies dans i18n.js
 
+function setDefaultTileShape(shape) {
+    localStorage.setItem('defaultTileShape', shape);
+    // Mettre à jour les boutons
+    ['rect','rounded','circle'].forEach(s => {
+        const btn = document.getElementById('dshape-' + s);
+        if (!btn) return;
+        const active = s === shape;
+        btn.style.borderColor = active ? 'var(--accent)' : 'rgba(0,0,0,0.2)';
+        btn.style.background  = active ? 'var(--accent)' : 'white';
+        btn.style.color       = active ? 'white' : '#333';
+    });
+    // Appliquer --tile-radius en fonction de la forme
+    const r = shape === 'circle' ? '50%' : shape === 'rounded' ? '12px' : '0px';
+    document.documentElement.style.setProperty('--tile-radius', r);
+}
+
 function applyBgImage(input) {
     const file = input.files?.[0];
     if (!file) return;
@@ -215,6 +245,21 @@ function initSkin() {
     const fsEl     = document.getElementById('c-fontsize'); if(fsEl)     { fsEl.value = fontSize; const sp = document.getElementById('font-size-val'); if(sp) sp.textContent = fontSize; }
     const bdEl     = document.getElementById('c-border');   if(bdEl)     { bdEl.value = border;   const sp = document.getElementById('border-val');    if(sp) sp.textContent = border; }
     const rdEl     = document.getElementById('c-radius');   if(rdEl)     { rdEl.value = radius;   const sp = document.getElementById('radius-val');    if(sp) sp.textContent = radius; }
+
+    // Restaurer couleurs bulles
+    const bKeys = ['bubbleMeBg','bubbleMeText','bubbleOtherBg','bubbleOtherText'];
+    const bVars = ['--bubble-me-bg','--bubble-me-text','--bubble-other-bg','--bubble-other-text'];
+    const bDefs = ['#18181b','#ffffff','#ffffff','#18181b'];
+    const bIds  = ['c-bubble-me-bg','c-bubble-me-text','c-bubble-other-bg','c-bubble-other-text'];
+    bKeys.forEach((k, i) => {
+        const val = localStorage.getItem(k) || bDefs[i];
+        document.documentElement.style.setProperty(bVars[i], val);
+        const el = document.getElementById(bIds[i]); if (el) el.value = val;
+    });
+
+    // Restaurer forme par défaut des tuiles
+    const defShape = localStorage.getItem('defaultTileShape') || 'rect';
+    setDefaultTileShape(defShape);
 
     // Restaurer image de fond
     const bgImg = localStorage.getItem('customBgImage');
@@ -272,24 +317,35 @@ async function loadGroupsList() {
             const logoHtml = g.logoUrl
                 ? `<img src="${g.logoUrl}" style="width:28px;height:28px;object-fit:cover;border:1px solid rgba(0,0,0,0.1);margin-bottom:3px;">`
                 : `<div style="width:28px;height:28px;background:rgba(0,0,0,0.07);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;margin-bottom:3px;">${g.name[0].toUpperCase()}</div>`;
+            // Style de la tuile selon personnalisation
+            const tColor  = g.tileColor     || (isActive ? 'var(--accent)' : '#fff');
+            const tText   = g.tileTextColor || (isActive ? '#fff' : 'var(--accent)');
+            const tShape  = g.tileShape     || 'rect';
+            const tFont   = g.tileFontFamily|| '';
+            const tFSize  = g.tileFontSize  || '8';
+            const radius  = tShape === 'circle' ? '50%' : tShape === 'rounded' ? '12px' : '0px';
+            const tileStyleExtra = `background:${tColor};color:${tText};border-radius:${radius};` +
+                (tFont   ? `font-family:${tFont};` : '') +
+                (tFSize  ? `font-size:${tFSize}px;` : '');
+
             return `<div id="tile-${g._id}"
                 ontouchstart="tileTouch(event,'${g._id}')"
                 ontouchmove="tileTouchMove(event)"
                 ontouchend="tileTouchEnd(event,'${g._id}')"
                 onclick="selectGroup('${g._id}')"
-                style="background:${bg};color:${color};
-                       border:2px solid ${isActive?'var(--accent)':'rgba(0,0,0,0.12)'};
+                style="${tileStyleExtra}
+                       border:2px solid ${isActive?'var(--accent)':'rgba(0,0,0,0.18)'};
                        box-shadow:${isActive?'3px 3px 0 rgba(0,0,0,0.35)':'3px 3px 0 rgba(0,0,0,0.12)'};
                        padding:8px 5px 16px 5px;cursor:pointer;display:flex;flex-direction:column;
                        align-items:center;text-align:center;position:relative;
                        min-height:88px;justify-content:center;
-                       user-select:none;-webkit-user-select:none;touch-action:none;">
+                       user-select:none;-webkit-user-select:none;touch-action:none;overflow:hidden;">
                 ${g.isPro ? `<span style="position:absolute;top:3px;right:3px;background:#18181b;color:#fff;font-size:6px;font-weight:900;padding:1px 3px;">PRO</span>
                              <span style="position:absolute;bottom:14px;right:3px;font-size:10px;opacity:0.4;">🛍️</span>` : ''}
                 ${canEdit ? `<button onclick="event.stopPropagation();uiEditGroup('${g._id}')"
-                    style="position:absolute;bottom:2px;left:3px;background:none;border:none;font-size:11px;cursor:pointer;opacity:0.45;padding:1px;touch-action:manipulation;">⚙️</button>` : ''}
+                    style="position:absolute;bottom:2px;left:3px;background:none;border:none;font-size:11px;cursor:pointer;opacity:0.5;padding:1px;touch-action:manipulation;">⚙️</button>` : ''}
                 ${logoHtml}
-                <div style="font-size:8px;font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;padding:0 2px;pointer-events:none;">${g.name}</div>
+                <div style="font-weight:900;text-transform:uppercase;line-height:1.2;word-break:break-word;padding:0 2px;pointer-events:none;">${g.name}</div>
             </div>`;
         }).join('');
 
@@ -914,6 +970,46 @@ function _openGroupEditModal(groupId, g) {
             <button onclick="addMemberToMatrix('${groupId}')" style="padding:7px 11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;cursor:pointer;">+</button>
           </div>
         </div>
+        <!-- ── Personnalisation de la tuile ──────────────────── -->
+        <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
+          <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:8px;">🎨 Apparence de la tuile</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">
+              Fond tuile
+              <input type="color" id="gm-tile-color" value="${g.tileColor||'#ffffff'}"
+                     style="width:100%;height:28px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
+            </label>
+            <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">
+              Texte tuile
+              <input type="color" id="gm-tile-text" value="${g.tileTextColor||'#18181b'}"
+                     style="width:100%;height:28px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
+            </label>
+          </div>
+          <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Forme</div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            ${['rect','rounded','circle'].map(s => `
+            <button onclick="selectTileShape('${s}')" id="gm-shape-${s}"
+              style="flex:1;padding:6px 4px;border:2px solid ${(g.tileShape||'rect')===s?'var(--accent)':'rgba(0,0,0,0.15)'};
+                     background:${(g.tileShape||'rect')===s?'var(--accent)':'white'};
+                     color:${(g.tileShape||'rect')===s?'white':'#333'};
+                     font-size:9px;font-weight:900;cursor:pointer;
+                     border-radius:${s==='circle'?'50%':s==='rounded'?'6px':'0'};
+                     text-transform:uppercase;">${s==='rect'?'■ Rect':s==='rounded'?'▢ Arrondi':'● Cercle'}</button>`).join('')}
+          </div>
+          <input type="hidden" id="gm-tile-shape" value="${g.tileShape||'rect'}">
+          <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Police</div>
+          <select id="gm-tile-font" style="width:100%;padding:7px;border:2px solid rgba(0,0,0,0.15);font-size:11px;background:white;margin-bottom:8px;">
+            <option value="" ${!g.tileFontFamily?'selected':''}>Défaut</option>
+            <option value="sans-serif" ${g.tileFontFamily==='sans-serif'?'selected':''}>Sans-serif</option>
+            <option value="Georgia,serif" ${g.tileFontFamily==='Georgia,serif'?'selected':''}>Georgia</option>
+            <option value="Courier New,monospace" ${g.tileFontFamily==='Courier New,monospace'?'selected':''}>Courier</option>
+          </select>
+          <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Taille texte : <span id="gm-tile-fsize-val">${g.tileFontSize||'8'}</span>px</div>
+          <input type="range" id="gm-tile-fsize" min="7" max="14" value="${g.tileFontSize||'8'}"
+                 oninput="document.getElementById('gm-tile-fsize-val').textContent=this.value"
+                 style="width:100%;margin-bottom:4px;accent-color:var(--accent);">
+        </div>
+
         ${isOwner ? `<div style="border-top:2px solid rgba(220,38,38,0.15);padding-top:7px;margin-bottom:7px;">
           <button onclick="confirmDeleteGroup('${groupId}')" style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️ Supprimer ce groupe</button>
         </div>` : ''}
@@ -977,6 +1073,18 @@ async function removeMemberFromMatrix(groupId, email) {
     const res = await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), { method:'DELETE' });
     if (res.ok) loadMembersMatrix(groupId, currentGroupConfig?.isPro);
 }
+function selectTileShape(shape) {
+    document.getElementById('gm-tile-shape').value = shape;
+    ['rect','rounded','circle'].forEach(s => {
+        const btn = document.getElementById('gm-shape-' + s);
+        if (!btn) return;
+        const active = s === shape;
+        btn.style.borderColor  = active ? 'var(--accent)' : 'rgba(0,0,0,0.15)';
+        btn.style.background   = active ? 'var(--accent)' : 'white';
+        btn.style.color        = active ? 'white' : '#333';
+    });
+}
+
 async function submitEditGroup(groupId) {
     const name = document.getElementById('gm-name')?.value?.trim();
     if (!name) return alert(typeof t==='function' ? t('nameRequired') : 'Le nom est obligatoire.');
@@ -986,7 +1094,13 @@ async function submitEditGroup(groupId) {
         ville:   document.getElementById('gm-ville')?.value?.trim()||'',
         phonePro:document.getElementById('gm-phone')?.value?.trim()||'',
         emailPro:document.getElementById('gm-email')?.value?.trim()||'',
-        siret:   document.getElementById('gm-siret')?.value?.trim()||'' };
+        siret:   document.getElementById('gm-siret')?.value?.trim()||'',
+        tileColor:      document.getElementById('gm-tile-color')?.value  || '',
+        tileTextColor:  document.getElementById('gm-tile-text')?.value   || '',
+        tileShape:      document.getElementById('gm-tile-shape')?.value  || 'rect',
+        tileFontFamily: document.getElementById('gm-tile-font')?.value   || '',
+        tileFontSize:   document.getElementById('gm-tile-fsize')?.value  || '8',
+    };
     const logoFile = document.getElementById('gm-logo')?.files?.[0];
     if (logoFile) {
         try {
