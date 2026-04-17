@@ -99,12 +99,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Profil utilisateur ────────────────────────────────────────
 async function loadProfile() {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    if (user.firstname) document.getElementById('prof-firstname')?.setAttribute('value', user.firstname);
-    if (user.lastname)  document.getElementById('prof-lastname')?.setAttribute('value', user.lastname);
-    if (user.email)     { const el = document.getElementById('prof-email'); if(el) el.value = user.email; }
-    if (user.phone)     { const el = document.getElementById('prof-phone'); if(el) el.value = user.phone; }
-    if (user.lang)      { const el = document.getElementById('prof-lang'); if(el) el.value = user.lang; }
+    // D'abord remplir avec localStorage (instantané)
+    const local = JSON.parse(localStorage.getItem('user') || '{}');
+    const setVal = (id, val) => { const el = document.getElementById(id); if(el && val) el.value = val; };
+    setVal('prof-firstname', local.firstname);
+    setVal('prof-lastname',  local.lastname);
+    setVal('prof-email',     local.email);
+    setVal('prof-phone',     local.phone);
+    setVal('prof-lang',      local.lang || 'fr');
+
+    // Puis rafraîchir depuis le serveur
+    try {
+        const res = await fetchAuth('/api/user/me');
+        if (res && res.ok) {
+            const user = await res.json();
+            setVal('prof-firstname', user.firstname);
+            setVal('prof-lastname',  user.lastname);
+            setVal('prof-email',     user.email);
+            setVal('prof-phone',     user.phone);
+            setVal('prof-lang',      user.lang || 'fr');
+            // Mettre à jour le localStorage
+            const stored = JSON.parse(localStorage.getItem('user') || '{}');
+            Object.assign(stored, user);
+            localStorage.setItem('user', JSON.stringify(stored));
+            // Appliquer la langue
+            if (user.lang && typeof applyLang === 'function') applyLang(user.lang);
+        }
+    } catch(e) { /* silencieux */ }
 }
 
 async function saveProfile() {
@@ -117,35 +138,33 @@ async function saveProfile() {
     try {
         const res = await fetchAuth('/api/user/profile', { method:'PUT', body: JSON.stringify(payload) });
         if (res.ok) {
+            const data = await res.json().catch(() => ({}));
             const user = JSON.parse(localStorage.getItem('user') || '{}');
-            Object.assign(user, payload);
+            Object.assign(user, payload, data);
             localStorage.setItem('user', JSON.stringify(user));
             setUserDisplay();
-            alert('✅ Profil enregistré.');
-        } else alert('Erreur : ' + await res.text());
-    } catch(e) { alert('Erreur réseau'); }
+            if (payload.lang && typeof applyLang === 'function') applyLang(payload.lang);
+            alert(typeof t==='function' ? t('profileSaved') : '✅ Profil enregistré.');
+        } else {
+            const txt = await res.text();
+            alert('Erreur : ' + txt);
+        }
+    } catch(e) { alert(typeof t==='function' ? t('errorNetwork') : 'Erreur réseau'); }
 }
 
 async function changePassword() {
     const cur = document.getElementById('prof-pwd-cur')?.value;
     const nw  = document.getElementById('prof-pwd-new')?.value;
     if (!cur || !nw) return alert('Remplissez les deux champs.');
-    if (nw.length < 6) return alert('Minimum 6 caractères.');
+    if (nw.length < 6) return alert(typeof t==='function' ? t('pwdShort') : 'Minimum 6 caractères.');
     try {
         const res = await fetchAuth('/api/user/password', { method:'PUT', body: JSON.stringify({ currentPassword: cur, newPassword: nw }) });
-        if (res.ok) { alert('✅ Mot de passe modifié.'); document.getElementById('prof-pwd-cur').value=''; document.getElementById('prof-pwd-new').value=''; }
+        if (res.ok) { alert(typeof t==='function' ? t('pwdChanged') : '✅ Mot de passe modifié.'); document.getElementById('prof-pwd-cur').value=''; document.getElementById('prof-pwd-new').value=''; }
         else alert('Erreur : ' + await res.text());
     } catch(e) { alert('Erreur réseau'); }
 }
 
-function applyLang(lang) {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    user.lang = lang;
-    localStorage.setItem('user', JSON.stringify(user));
-    localStorage.setItem('lang', lang);
-    // Stub : rechargement simple pour l'instant (à étendre avec i18n)
-    console.log('[Lang] Langue sélectionnée:', lang);
-}
+// applyLang et t() définies dans i18n.js
 
 function applyBgImage(input) {
     const file = input.files?.[0];
@@ -716,6 +735,7 @@ async function initApp() {
     initSkin();
     measureHeaderHeight();
     loadProfile();
+    if (typeof initLang === 'function') initLang();
     await loadGroups();
     await refreshParamsLists();
     // Restaurer la config UI du dernier groupe visité
@@ -959,7 +979,7 @@ async function removeMemberFromMatrix(groupId, email) {
 }
 async function submitEditGroup(groupId) {
     const name = document.getElementById('gm-name')?.value?.trim();
-    if (!name) return alert('Le nom est obligatoire.');
+    if (!name) return alert(typeof t==='function' ? t('nameRequired') : 'Le nom est obligatoire.');
     const payload = { name,
         company: document.getElementById('gm-company')?.value?.trim()||'',
         cp:      document.getElementById('gm-cp')?.value?.trim()||'',
@@ -987,11 +1007,11 @@ function confirmDeleteGroup(groupId) {
     const inner = modal.querySelector('div');
     if (inner) inner.innerHTML = `<div style="padding:22px;text-align:center;">
         <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
-        <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Supprimer ce groupe ?</div>
-        <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">Tous les postits et messages seront supprimés.</div>
+        <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">${t('deleteGroupConfirm')}</div>
+        <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">${t('deleteGroupMsg')}</div>
         <div style="display:flex;gap:8px;">
-          <button onclick="document.getElementById('group-modal').remove()" style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
-          <button onclick="executeDeleteGroup('${groupId}')" style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Supprimer</button>
+          <button onclick="document.getElementById('group-modal').remove()" style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">${t('cancel')}</button>
+          <button onclick="executeDeleteGroup('${groupId}')" style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">${t('deleteBtn')}</button>
         </div></div>`;
 }
 async function executeDeleteGroup(groupId) {
@@ -1313,6 +1333,8 @@ function renderPostitTabs(postits, selectedId) {
         }
 
         // Roue ⚙️ visible uniquement pour le proprio du postit ou owner/admin
+        // Roue visible si proprio du postit OU owner/admin du groupe
+        // Pour les autres : pas de roue (ils ne peuvent qu'ouvrir en lecture via tap sur la tuile si besoin)
         const isOwnerOfPostit = (currentUser && p.ownerEmail === currentUser.email) || isOwnerOrAdmin;
         const gear = isOwnerOfPostit
             ? `<button onclick="event.stopPropagation(); uiEditPostit('${p._id}')"
@@ -1420,7 +1442,7 @@ function uiCreatePostit() {
 
 async function submitCreatePostit() {
     const name = document.getElementById('pm-name')?.value?.trim();
-    if (!name) return alert('Le nom est obligatoire.');
+    if (!name) return alert(typeof t==='function' ? t('nameRequired') : 'Le nom est obligatoire.');
 
     const selDev = document.getElementById('sel-dev');
     const deviceId = selDev?.value;
@@ -1461,70 +1483,88 @@ async function uiEditPostit(postitId) {
     const p = _cachedPostits.find(x => x._id === postitId);
     if (!p) return;
 
-    const isPro = currentGroupConfig?.isPro;
-    const fmtDate = p.pickupDate ? new Date(p.pickupDate).toISOString().slice(0,16) : '';
-    const isOwnerOrAdmin = ['owner','admin'].includes(currentGroupConfig?.myRole);
+    const isPro        = currentGroupConfig?.isPro;
+    const myRole       = currentGroupConfig?.myRole || 'client';
+    const fmtDate      = p.pickupDate ? new Date(p.pickupDate).toISOString().slice(0,16) : '';
+    const isOwnerOrAdmin = ['owner','admin'].includes(myRole);
+    const isPostitOwner  = currentUser && p.ownerEmail === currentUser.email;
+    // Peut éditer : créateur du postit OU owner/admin du groupe
+    const canEdit = isPostitOwner || isOwnerOrAdmin;
+
+    // Champs : readonly si lecture seule
+    const ro  = canEdit ? '' : 'readonly';
+    const roStyle = canEdit
+        ? 'background:white;'
+        : 'background:#f4f4f4;color:#888;cursor:default;';
 
     const modalHtml = `
     <div id="postit-edit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
         <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);padding:20px;width:100%;max-width:380px;margin-top:60px;">
-            <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:14px;">⚙️ ${isPro ? 'Commande' : 'Postit'}</h3>
+            <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:4px;">
+                ${canEdit ? '⚙️' : '👁️'} ${isPro ? t('orderInfo').replace('📦 ','') : 'Postit'}
+            </h3>
+            ${!canEdit ? `<div style="font-size:9px;opacity:0.5;margin-bottom:12px;font-style:italic;">Lecture seule — vous n'êtes pas le créateur</div>` : '<div style="margin-bottom:14px;"></div>'}
 
-            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Nom</div>
-            <input type="text" id="pe-name" value="${p.name||''}"
-                   style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;background:white;box-sizing:border-box;">
+            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('clientName').replace(' *','')}</div>
+            <input type="text" id="pe-name" value="${p.name||''}" ${ro}
+                   style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;${roStyle}box-sizing:border-box;">
 
             ${isPro ? `
-            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Date de retrait</div>
-            <input type="datetime-local" id="pe-date" value="${fmtDate}"
-                   style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;background:white;box-sizing:border-box;">
+            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('pickupDate').replace(' *','')}</div>
+            <input type="datetime-local" id="pe-date" value="${fmtDate}" ${ro}
+                   style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;${roStyle}box-sizing:border-box;">
             <div style="display:flex;gap:8px;margin-bottom:10px;">
                 <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Téléphone</div>
-                    <input type="tel" id="pe-phone" value="${p.phone||''}"
-                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('phone')}</div>
+                    <input type="tel" id="pe-phone" value="${p.phone||''}" ${ro}
+                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;${roStyle}box-sizing:border-box;">
                 </div>
                 <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">N° commande</div>
-                    <input type="text" id="pe-ordernum" value="${p.orderNumber||''}"
-                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
+                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('orderNum')}</div>
+                    <input type="text" id="pe-ordernum" value="${p.orderNumber||''}" ${ro}
+                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;${roStyle}box-sizing:border-box;">
                 </div>
             </div>` : ''}
 
-            <!-- Participants invités sur ce postit -->
+            ${canEdit ? `
+            <!-- Participants (visible seulement si canEdit) -->
             <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:10px;margin-bottom:10px;">
-                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">Participants de ce postit</div>
+                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">${t('postitParticipants')}</div>
                 <div id="pe-invites-list" style="min-height:20px;margin-bottom:6px;">
                     <em style="opacity:0.4;font-size:10px;">Chargement…</em>
                 </div>
-                <div style="font-size:7px;opacity:0.4;margin-bottom:5px;">⚠️ Chaque invité voit uniquement ce postit, pas les autres.</div>
+                <div style="font-size:7px;opacity:0.4;margin-bottom:5px;">${t('inviteWarning')}</div>
                 <div style="display:flex;gap:6px;">
-                    <input type="email" id="pe-invite-email" placeholder="Inviter par email…"
+                    <input type="email" id="pe-invite-email" placeholder="${t('inviteByEmail')}"
                            style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:12px;background:white;box-sizing:border-box;">
                     <button onclick="submitInviteToPostit('${postitId}')"
                             style="padding:7px 10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">+</button>
                 </div>
-            </div>
+            </div>` : ''}
 
             <div style="display:flex;gap:6px;margin-top:14px;flex-wrap:wrap;">
+                ${canEdit ? `
                 <button onclick="document.getElementById('postit-edit-modal').remove()"
-                        style="flex:1;padding:10px;border:2px solid var(--accent);background:white;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+                        style="flex:1;padding:10px;border:2px solid var(--accent);background:white;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('cancel')}</button>
                 <button onclick="submitEditPostit('${postitId}')"
-                        style="flex:2;padding:10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">Modifier</button>
+                        style="flex:2;padding:10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('modify')}</button>
                 ${isOwnerOrAdmin ? `<button onclick="confirmDeletePostit('${postitId}')"
                         style="flex:1;padding:10px;background:#dc2626;color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️</button>` : ''}
+                ` : `
+                <button onclick="document.getElementById('postit-edit-modal').remove()"
+                        style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">OK</button>
+                `}
             </div>
         </div>
     </div>`;
 
     document.body.insertAdjacentHTML('beforeend', modalHtml);
-    // Charger les invités du postit
-    setTimeout(() => loadPostitInvites(postitId), 80);
+    if (canEdit) setTimeout(() => loadPostitInvites(postitId), 80);
 }
 
 async function submitEditPostit(postitId) {
     const name = document.getElementById('pe-name')?.value?.trim();
-    if (!name) return alert('Le nom est obligatoire.');
+    if (!name) return alert(typeof t==='function' ? t('nameRequired') : 'Le nom est obligatoire.');
 
     const isPro = currentGroupConfig?.isPro;
     const payload = { name };
@@ -1598,13 +1638,13 @@ function confirmDeletePostit(postitId) {
     if (conf) conf.innerHTML = `
         <div style="padding:20px;text-align:center;">
             <div style="font-size:32px;margin-bottom:12px;">🗑️</div>
-            <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">Supprimer ce postit ?</div>
-            <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">Cette action supprimera aussi tous les messages.</div>
+            <div style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:8px;">${t('deletePostitConfirm')}</div>
+            <div style="font-size:10px;opacity:0.5;margin-bottom:20px;">${t('deletePostitMsg')}</div>
             <div style="display:flex;gap:8px;">
                 <button onclick="document.getElementById('postit-edit-modal').remove()"
-                        style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+                        style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">${t('cancel')}</button>
                 <button onclick="executeDeletePostit('${postitId}')"
-                        style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Supprimer</button>
+                        style="flex:1;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">${t('deleteBtn')}</button>
             </div>
         </div>`;
 }

@@ -14,7 +14,7 @@
 <div id="auth-screen">
     <h1 class="text-4xl font-black mb-10 italic text-center tracking-tighter">e-POSTIT</h1>
     <input type="text"     id="auth-name"  placeholder="Nom complet" class="hidden">
-    <input type="email"    id="auth-email" placeholder="Email">
+    <input type="email"    id="auth-email" placeholder="Email" data-i18n="emailLabel">
     <input type="password" id="auth-pass"  placeholder="Mot de passe">
     <button onclick="handleAuth()" id="auth-btn" class="btn-black h-14 mt-4 text-lg">Connexion</button>
     <p class="text-center mt-6 text-[10px] uppercase font-black cursor-pointer opacity-50"
@@ -93,23 +93,23 @@
         <div class="acc-item">
             <input type="checkbox" id="check-profil" class="acc-trigger" checked>
             <div class="acc-header">
-                <label for="check-profil" class="acc-label-text">👤 Profil</label>
+                <label for="check-profil" class="acc-label-text" data-i18n="profile">👤 Profil</label>
                 <label for="check-profil" class="acc-toggle-icon"></label>
             </div>
             <div class="acc-content">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                     <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Prénom
-                        <input type="text" id="prof-firstname" placeholder="Prénom" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
+                        <input type="text" id="prof-firstname" placeholder="Prénom" data-i18n="firstname" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                     </label>
                     <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Nom
-                        <input type="text" id="prof-lastname" placeholder="Nom" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
+                        <input type="text" id="prof-lastname" placeholder="Nom" data-i18n="lastname" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                     </label>
                 </div>
                 <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">Email
                     <input type="email" id="prof-email" placeholder="Email" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                 </label>
                 <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">Téléphone
-                    <input type="tel" id="prof-phone" placeholder="Téléphone" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
+                    <input type="tel" id="prof-phone" placeholder="Téléphone" data-i18n="phone" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                 </label>
                 <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:12px;">Langue
                     <select id="prof-lang" onchange="applyLang(this.value)" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
@@ -120,7 +120,7 @@
                         <option value="it">🇮🇹 Italiano</option>
                     </select>
                 </label>
-                <button onclick="saveProfile()" style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Enregistrer</button>
+                <button id="btn-save-profile" onclick="saveProfile()" style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;" data-i18n="saveProfile">Enregistrer</button>
             </div>
         </div>
 
@@ -128,13 +128,13 @@
         <div class="acc-item">
             <input type="checkbox" id="check-mdp" class="acc-trigger">
             <div class="acc-header">
-                <label for="check-mdp" class="acc-label-text">🔒 Mot de passe</label>
+                <label for="check-mdp" class="acc-label-text" data-i18n="password">🔒 Mot de passe</label>
                 <label for="check-mdp" class="acc-toggle-icon"></label>
             </div>
             <div class="acc-content">
-                <input type="password" id="prof-pwd-cur" placeholder="Mot de passe actuel" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
-                <input type="password" id="prof-pwd-new" placeholder="Nouveau mot de passe" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
-                <button onclick="changePassword()" style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Changer</button>
+                <input type="password" id="prof-pwd-cur" placeholder="Mot de passe actuel" data-i18n="currentPwd" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
+                <input type="password" id="prof-pwd-new" placeholder="Nouveau mot de passe" data-i18n="newPwd" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
+                <button id="btn-change-pwd" onclick="changePassword()" style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;" data-i18n="changePwd">Changer</button>
             </div>
         </div>
 
@@ -142,7 +142,7 @@
         <div class="acc-item">
             <input type="checkbox" id="check-skin" class="acc-trigger">
             <div class="acc-header">
-                <label for="check-skin" class="acc-label-text">🎨 Apparence</label>
+                <label for="check-skin" class="acc-label-text" data-i18n="appearance">🎨 Apparence</label>
                 <label for="check-skin" class="acc-toggle-icon"></label>
             </div>
             <div class="acc-content">
@@ -220,7 +220,7 @@
         <div class="acc-item" id="acc-eink" style="flex-shrink:0; border-bottom:none; padding:0 8px;">
             <input type="checkbox" id="check-eink" class="acc-trigger">
             <div class="acc-header" style="padding:3px 0;">
-                <label for="check-eink" class="acc-label-text" style="font-size:0.6rem;">📋 Résumé</label>
+                <label for="check-eink" class="acc-label-text" style="font-size:0.6rem;" data-i18n="summary">📋 Résumé</label>
                 <div style="display:flex; align-items:center; gap:4px;">
                     <button onclick="goToPage(4); event.stopPropagation();"
                             style="background:#eff6ff; color:#2563eb; padding:3px 5px; border:1px solid #bfdbfe; font-size:10px; cursor:pointer;">⤢</button>
@@ -270,7 +270,7 @@
             style="display:flex; align-items:center; justify-content:center; flex-shrink:0;">
         <span style="font-size:18px; line-height:1;">📎</span>
     </button>
-    <textarea id="msg-input" placeholder="Écrire un message…" style="flex:1; margin:0 5px;"></textarea>
+    <textarea id="msg-input" placeholder="Écrire un message…" data-i18n="writeMsg" style="flex:1; margin:0 5px;"></textarea>
     <button onclick="send()" class="btn-send"
             style="display:flex; align-items:center; justify-content:center; flex-shrink:0;">
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
@@ -332,6 +332,7 @@
     <div class="tab-item" onclick="goToPage(3)"><span>💬</span><span>Chat</span></div>
 </nav>
 
+<script src="js/i18n.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/navigation.js"></script>
 <script src="js/app.js"></script>

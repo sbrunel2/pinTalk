@@ -51,9 +51,13 @@ mongoose.connect(MONGO_URI)
   .catch(err => console.error("❌ Erreur de connexion MongoDB:", err));
 
 const userSchema = new mongoose.Schema({
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    name: { type: String }
+    email:     { type: String, required: true, unique: true },
+    password:  { type: String, required: true },
+    name:      { type: String },
+    firstname: { type: String, default: '' },
+    lastname:  { type: String, default: '' },
+    phone:     { type: String, default: '' },
+    lang:      { type: String, default: 'fr' },
 });
 
 const User = mongoose.model('User', userSchema);
@@ -161,7 +165,7 @@ app.post('/api/login', async (req, res) => {
 
         // 3. SIGNATURE : On ne signe le badge que si tout est OK
         const token = jwt.sign(
-            { userId: user._id, email: user.email },
+            { _id: user._id, id: user._id, email: user.email },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
@@ -169,7 +173,9 @@ app.post('/api/login', async (req, res) => {
         // 4. RÉPONSE : On renvoie les infos
         res.json({ 
             token, 
-            user: { id: user._id, email: user.email, name: user.name } 
+            user: { _id: user._id, id: user._id, email: user.email, name: user.name,
+                    firstname: user.firstname || '', lastname: user.lastname || '',
+                    phone: user.phone || '', lang: user.lang || 'fr' }
         });
 
     } catch (err) {
@@ -180,7 +186,7 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/register', async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, firstname, lastname, email, password, phone, lang } = req.body;
 
         // 1. Vérifier si l'utilisateur existe déjà
         const userExists = await User.findOne({ email });
@@ -188,63 +194,34 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ message: "Cet email est déjà utilisé" });
         }
 
-        // 2. Créer le nouvel utilisateur
+        // 2. Créer le nouvel utilisateur (sans groupe ni postit par défaut)
         const newUser = new User({
-            name: name || email.split('@')[0], // Sécurité si le nom est vide
+            name:      name || email.split('@')[0],
+            firstname: firstname || '',
+            lastname:  lastname  || '',
             email,
-            password 
+            password,
+            phone: phone || '',
+            lang:  lang  || 'fr',
         });
 
         await newUser.save();
 
-        // 🚀 3. GÉNÉRER LE TOKEN (Indispensable pour la suite !)
+        // 3. Générer le token
         const token = jwt.sign(
-            { userId: newUser._id, email: newUser.email },
+            { _id: newUser._id, id: newUser._id, email: newUser.email },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
 
-        // 4. Créer le groupe perso par défaut
-        try {
-            const firstName = (newUser.name || email.split('@')[0]).split(' ')[0];
-            const defaultGroup = new Group({
-                name: `Groupe de ${newUser.name || firstName}`,
-                ownerEmail: newUser.email,
-                joinCode: generateJoinCode(),
-                type: 'perso',
-                isPro: false,
-                isDefault: true
-            });
-            const savedGroup = await defaultGroup.save();
+        console.log(`[REGISTER] Nouvel utilisateur : ${newUser.email} (lang: ${newUser.lang})`);
 
-            // Créer le rayon par défaut (invisible pour perso)
-            const defaultDevice = new Device({
-                name: 'DEFAUT',
-                groupId: savedGroup._id,
-                ownerEmail: newUser.email,
-                mac: '00'
-            });
-            const savedDevice = await defaultDevice.save();
-
-            // Créer le premier postit par défaut
-            await new Postit({
-                name: 'DEFAUT',
-                deviceId: savedDevice._id,
-                ownerEmail: newUser.email,
-                pickupDate: new Date().toISOString(),
-                status: 'En attente'
-            }).save();
-
-            console.log(`[REGISTER] Groupe perso créé pour ${newUser.email} : ${savedGroup.name}`);
-        } catch (groupErr) {
-            console.error("Avertissement création groupe par défaut:", groupErr.message);
-            // On continue même si la création du groupe échoue
-        }
-
-        // 5. Répondre avec l'User ET le Token
+        // 4. Répondre avec l'User ET le Token
         res.status(201).json({ 
             token,
-            user: { _id: newUser._id, name: newUser.name, email: newUser.email }
+            user: { _id: newUser._id, name: newUser.name, firstname: newUser.firstname,
+                    lastname: newUser.lastname, email: newUser.email,
+                    phone: newUser.phone, lang: newUser.lang }
         });
 
     } catch (err) {
@@ -282,17 +259,34 @@ app.use('/api', (req, res, next) => {
 });
 
 // ── Profil utilisateur ─────────────────────────────────────────────────────
+// GET profil de l'utilisateur connecté
+app.get('/api/user/me', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findOne({ email: req.user.email });
+        if (!user) return res.status(404).send('Utilisateur introuvable');
+        res.json({
+            email:     user.email,
+            name:      user.name      || '',
+            firstname: user.firstname || '',
+            lastname:  user.lastname  || '',
+            phone:     user.phone     || '',
+            lang:      user.lang      || 'fr',
+        });
+    } catch(e) { res.status(500).send('Erreur serveur'); }
+});
+
+
 app.put('/api/user/profile', authenticateToken, async (req, res) => {
     try {
         const { firstname, lastname, phone, lang } = req.body;
-        const user = await User.findById(req.user._id || req.user.id);
+        const user = await User.findOne({ email: req.user.email });
         if (!user) return res.status(404).send('Utilisateur introuvable');
         if (firstname !== undefined) user.firstname = firstname;
         if (lastname  !== undefined) user.lastname  = lastname;
         if (phone     !== undefined) user.phone     = phone;
         if (lang      !== undefined) user.lang      = lang;
         await user.save();
-        res.json({ ok: true });
+        res.json({ ok: true, user: { email: user.email, firstname: user.firstname, lastname: user.lastname, phone: user.phone, lang: user.lang } });
     } catch(e) { res.status(500).send('Erreur serveur'); }
 });
 
@@ -300,7 +294,7 @@ app.put('/api/user/password', authenticateToken, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
         if (!currentPassword || !newPassword) return res.status(400).send('Champs manquants');
-        const user = await User.findById(req.user._id || req.user.id);
+        const user = await User.findOne({ email: req.user.email });
         if (!user) return res.status(404).send('Utilisateur introuvable');
         const bcrypt = require('bcryptjs');
         const valid = await bcrypt.compare(currentPassword, user.password);
@@ -983,34 +977,40 @@ app.get('/api/postits/details/:id', async (req, res) => {
 // Modifier la route PUT existante pour accepter tous les champs
 app.put('/api/postits/:id', async (req, res) => {
     try {
-        // 1. On récupère les données à modifier du body.
-        // 🗑️ On dégage 'ownerEmail' : on utilise l'identité du Token.
-        const { name, orderNumber, phone, pickupDate } = req.body;
-        const userEmail = req.user.email; // 🔑 Identité certifiée
+        const { name, orderNumber, phone, email, pickupDate } = req.body;
+        const userEmail = req.user.email;
 
-        // 2. On cherche le post-it ET on vérifie qu'il appartient bien à cet utilisateur
-        // Cela empêche un utilisateur A de modifier un post-it appartenant à B.
-        const postit = await Postit.findOneAndUpdate(
-            { _id: req.params.id, ownerEmail: userEmail }, 
-            { 
-                name, 
-                orderNumber, 
-                phone, 
-                pickupDate 
-            },
-            { new: true } 
-        );
+        const postit = await Postit.findById(req.params.id);
+        if (!postit) return res.status(404).send("Post-it introuvable.");
 
-        if (!postit) {
-            // Si le post-it n'existe pas OU si l'ownerEmail ne correspond pas
-            return res.status(404).send("Post-it non trouvé ou accès refusé.");
+        // Droits : owner du postit OU owner/admin du groupe
+        let canEdit = (postit.ownerEmail === userEmail);
+        if (!canEdit) {
+            const device = await Device.findById(postit.deviceId);
+            const group  = device ? await Group.findById(device.groupId) : null;
+            if (group) {
+                if (group.ownerEmail === userEmail) {
+                    canEdit = true;
+                } else {
+                    const perm = await Permission.findOne({ groupId: group._id.toString(), guestEmail: userEmail });
+                    if (perm && perm.role === 'admin') canEdit = true;
+                }
+            }
         }
+        if (!canEdit) return res.status(403).send("Accès refusé.");
 
-        console.log(`[PUT] Post-it mis à jour par ${userEmail} : ${postit.name}`);
+        if (name        !== undefined) postit.name        = name;
+        if (orderNumber !== undefined) postit.orderNumber = orderNumber;
+        if (phone       !== undefined) postit.phone       = phone;
+        if (email       !== undefined) postit.email       = email;
+        if (pickupDate  !== undefined) postit.pickupDate  = pickupDate;
+        await postit.save();
+
+        console.log(`[PUT] Postit modifié par ${userEmail} : ${postit.name}`);
         res.sendStatus(200);
     } catch (err) {
-        console.error("Erreur modification postit:", err);
-        res.status(500).send("Erreur serveur lors de la modification.");
+        console.error("Erreur PUT postit:", err);
+        res.status(500).send("Erreur serveur.");
     }
 });
 
@@ -1164,9 +1164,32 @@ app.get('/api/postits/:id/invites', authenticateToken, async (req, res) => {
 });
 
 
-app.delete('/api/postits/:id', async (req, res) => {
-    await Postit.findByIdAndDelete(req.params.id);
-    res.sendStatus(200);
+app.delete('/api/postits/:id', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const postit = await Postit.findById(req.params.id);
+        if (!postit) return res.status(404).send("Post-it introuvable.");
+
+        let canDelete = (postit.ownerEmail === userEmail);
+        if (!canDelete) {
+            const device = await Device.findById(postit.deviceId);
+            const group  = device ? await Group.findById(device.groupId) : null;
+            if (group) {
+                if (group.ownerEmail === userEmail) canDelete = true;
+                else {
+                    const perm = await Permission.findOne({ groupId: group._id.toString(), guestEmail: userEmail });
+                    if (perm && perm.role === 'admin') canDelete = true;
+                }
+            }
+        }
+        if (!canDelete) return res.status(403).send("Accès refusé.");
+
+        await Postit.findByIdAndDelete(req.params.id);
+        res.sendStatus(200);
+    } catch(err) {
+        console.error("Erreur DELETE postit:", err);
+        res.status(500).send("Erreur serveur.");
+    }
 });
 
 // Route pour supprimer un message (et son image sur Cloudinary si besoin)
