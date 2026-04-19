@@ -1,0 +1,145 @@
+28000Ch@rtreS
+brunels2_db_user
+
+mongodb+srv://brunels2_db_user:28000Ch@rtreS@aigenis01.z2lb974.mongodb.net/?appName=aigenis01
+
+Server  Oracle : 141.253.115.76
+
+PS D:\#0-Documents\PlatformIO\postit-server\clé SSH\Private Key> ssh -i .\ssh-key-2026-03-31.key ubuntu@141.253.115.76
+me connecte en ssh au serveur oracle
+
+
+http://141.253.115.76:3000/api/groups
+une fois connecté en ssh : cd /home/ubuntu/pinTalk/postit-server
+puis git pull origin main
+
+
+Gemini a dit
+Imagine que PM2, c'est comme un "garde du corps" pour ton serveur Node.js.
+
+Quand tu lances ton code avec node server.js, si tu fermes ton terminal SSH ou si ton code fait une erreur et plante, le serveur s'arrête net. PM2, lui, reste ouvert en arrière-plan, surveille ton application et la relance instantanément si elle "tombe".
+
+Voici le guide de survie pour l'utiliser sur ton instance Oracle :
+
+1. Démarrer ton serveur pour la première fois
+Au lieu de faire node server.js, tu te places dans ton dossier et tu tapes :
+
+Bash
+pm2 start server.js --name "mon-app"
+L'option --name est pratique pour identifier ton projet plus tard.
+
+2. Les commandes que tu vas utiliser tous les jours
+Une fois lancé, tu ne vois plus les messages "Serveur prêt sur le port 3000". Voici comment piloter l'avion :
+
+pm2 list : C'est ton tableau de bord. Tu vois si ton app est "online", combien de fois elle a redémarré toute seule et combien de RAM elle consomme.
+
+pm2 logs : C'est indispensable. Ça affiche en temps réel ce que tu voyais avant dans ton terminal (tes console.log, les erreurs, etc.).
+
+pm2 restart mon-app : À faire après chaque git pull pour que le serveur charge ton nouveau code.
+
+pm2 stop mon-app : Pour éteindre le serveur proprement.
+
+En cas de probleme avec pm2: 
+1. Identifier le nom du processus
+Tape la commande suivante pour voir ce qui tourne (ou ce qui est arrêté) :
+
+Bash
+pm2 status
+Regarde dans la colonne "name". Si tu vois un nom comme postit-server ou app, c'est ce nom-là qu'il faut utiliser pour le restart.
+
+2. Relancer proprement (La solution "Reset")
+Si pm2 status ne montre rien ou que tu veux repartir sur une base saine, fais ceci depuis le dossier de ton serveur :
+
+Bash
+# Supprimer les anciens résidus (si existants)
+pm2 delete all
+
+# Lancer le serveur en lui donnant un nom clair
+pm2 start server.js --name "postit-app" --update-env
+
+# Sauvegarder pour qu'il redémarre tout seul si Oracle crash à nouveau
+pm2 save
+
+
+
+CLOUDINARY
+
+avec les parametres f_auto et q_auto on optimise le stockage de photo en les compressant au mieux (60%)
+https://res.cloudinary.com/dik6bvb8g/image/upload/f_auto,q_auto/samples/ecommerce/leather-bag-gray.jpg
+
+cloud name : dik6bvb8g 
+API Secret : AwPmE-Oeru1V-FhYRNESQNhgWAM
+API Key : 186977984974285
+
+
+
+git add .
+git commit -m "Security: Final members route protection"
+git push origin main
+# Sur le serveur Oracle :
+git pull origin main
+pm2 restart all
+pm2 logs
+
+
+
+Pour utiliser Git Bash efficacement dans ton projet, voici un aide-mémoire des commandes essentielles classées par utilité.
+
+1. Navigation et Gestion de fichiers (Base)
+Puisque tu travailles sur un chemin spécifique (D:\#0-Documents\PlatformIO\...), ces commandes sont tes outils de déplacement :
+
+cd "chemin/du/dossier" : Se déplacer dans un dossier.
+
+Astuce : Tape cd  puis fais glisser ton dossier depuis l'explorateur Windows dans la fenêtre Git Bash pour coller le chemin automatiquement.
+
+ls : Lister les fichiers du dossier actuel.
+
+pwd : Afficher le chemin complet où tu te trouves.
+
+mkdir nom_dossier : Créer un nouveau dossier.
+
+2. Commandes Git (Versionnage)
+C'est le cœur de Git Bash pour ton projet postit-server :
+
+git status : La commande la plus importante. Elle te dit quels fichiers ont été modifiés et s'ils sont prêts à être enregistrés.
+
+git add . : Prépare tous les fichiers modifiés pour l'enregistrement (le "stage").
+
+git commit -m "ton message" : Enregistre tes modifications localement avec un commentaire explicatif.
+
+git push : Envoie tes modifications sur ton dépôt distant (GitHub/GitLab).
+
+git pull : Récupère les dernières modifications du serveur vers ton ordinateur.
+
+git log --oneline : Affiche l'historique simplifié de tes commits.
+
+3. Commandes Node.js / Serveur (Ton projet actuel)
+Même si c'est Git Bash, tu l'utilises pour piloter ton serveur :
+
+npm start ou node server.js : Lance ton serveur.
+
+npm install : Installe toutes les dépendances listées dans ton package.json (indispensable si tu as supprimé node_modules).
+
+npm install nom_du_paquet : Ajoute une nouvelle bibliothèque (ex: npm install cloudinary).
+
+ls -a : Très utile pour voir si ton fichier .env est bien présent (il est caché par défaut).
+
+4. Raccourcis "Vie Sauvage" (Gain de temps)
+Tabulation (Touche Tab) : Complète automatiquement le nom d'un fichier ou d'un dossier. Tape les premières lettres et appuie sur Tab.
+
+Flèche Haut / Bas : Fait défiler l'historique des commandes que tu as déjà tapées (évite de tout réécrire).
+
+Ctrl + C : Arrête de force le serveur qui tourne ou une commande bloquée.
+
+clear : Nettoie l'écran de la console pour y voir plus clair.
+
+💡 Un conseil pour ton erreur actuelle :
+Si tu veux vérifier que ton code est bien à jour sur ton disque avant de relancer ton serveur, tape :
+
+Bash
+git status
+Si tu vois des fichiers en rouge, c'est que tes modifications (comme celles du refreshView) ne sont pas encore "validées" par Git, mais elles sont bien sur ton disque. Tu peux lancer le serveur sans crainte.
+
+
+
+les tuiles sur la page des groupes et la partie Resume au dessus de la conversation sont masquées par l'entete de la page groupe ou chat. Leur position ont du changer lors des dernières modifs... Le bouton logout n'est plus calé à droite sur la page des groupes, il est maintenant a droite du titre. POUR UN GROUPE PERSONNEL : Lorsqu'un utilisateur est ajouté en tant que membre d'un groupe, il doit être ajouté comme membre au niveau de chaque postit du groupe (de meme lors de la création d'un postit). Ainsi si on souhaite lui masquer  un postit alors qu'il est membre du groupe, on peut le faire en le supprimant de la liste des membre d'un postit.  Dans l'entete on ne voit plus le nom de l'utilisateur connecté. Sur les tuiles de groupe, je voudrai qu'on affiche la miniature du logo du groupe ainsi que le nom du groupe. Quand je drag and drop une tuile pour regorganiser les tuiles, je rentre dans le chat de la tuile que je deplace ce qui est très perturbant. De plus cela selectionne les texte des tuiles ce qui est très bizarre à l'écran... Enfin pourquoi la tuile que je deplace est affichée lors du déplacement comme un retangle plus petit que sa taille réelle (en hauteur seulement)? A mon sens ce serait mieux que ce qu ise déplace soit le contour de la tuile complete (meme taille...). Repars bien de ta derniere version des outputs pour ne pas perdre tout le travail fait précédemment.
