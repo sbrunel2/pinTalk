@@ -1,7 +1,7 @@
 :root { --bg: #efeee9; --accent: #18181b; }
 
 /* RESET BRUTALISTE */
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; border-radius: 0 !important; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; border-radius: 0; }
 
 html, body { background: var(--bg); overflow: hidden; height: 100%; position: fixed; width: 100%; font-family: sans-serif; }
 
@@ -256,8 +256,8 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
     background:var(--bg); color:var(--accent);
 }
 #skin-selector .skin-btn.active { background:var(--accent); color:var(--bg); }
-#skin-color-pickers { width:100%; display:none; gap:6px; margin-top:6px; }
-#skin-color-pickers.visible { display:flex; }
+#skin-color-pickers { width:100%; display:none; margin-top:6px; }
+#skin-color-pickers.visible { display:block !important; }
 #skin-color-pickers label { font-size:8px; font-weight:900; text-transform:uppercase; }
 #skin-color-pickers input[type=color] { width:40px; height:30px; border:2px solid var(--accent); padding:0; cursor:pointer; background:none; }
 
@@ -328,9 +328,20 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
 
 /* Arrondi tuiles dynamique */
 body { font-family: var(--font-family); font-size: var(--font-size); }
-#groups-grid [id^="tile-"],
+/* Tuiles groupes et pintalk : forme dynamique — border-radius appliqué par JS via style inline */
+#groups-grid [id^="tile-"] {
+    overflow: hidden;
+    transition: border-radius 0.15s, width 0.15s, height 0.15s;
+}
 #header-postit-tabs > div {
-    border-radius: var(--tile-radius) !important;
+    overflow: hidden;
+}
+/* Cercle : forcer carré */
+#groups-grid.tiles-circle [id^="tile-"] {
+    width: 88px !important;
+    min-height: 88px !important;
+    height: 88px !important;
+    padding: 4px !important;
 }
 #acc-eink .acc-content #eink-sim,
 .acc-content #eink-sim {
@@ -345,3 +356,11 @@ body { font-family: var(--font-family); font-size: var(--font-size); }
 body.has-bg-image { background-attachment: fixed; background-size: cover; background-position: center; }
 body.has-bg-image .page, body.has-bg-image .fixed-header { background: transparent; }
 body.has-bg-image .fixed-header { background: rgba(255,255,255,0.85); backdrop-filter: blur(4px); }
+
+/* ── Forme des boutons dynamique ─────────────────────────────*/
+:root {
+    --btn-radius: 0px;
+}
+button, .btn-send, .btn-black, .btn-plus-3d, .skin-btn {
+    border-radius: var(--btn-radius, 0px) !important;
+}

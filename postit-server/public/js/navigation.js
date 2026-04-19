@@ -10,8 +10,8 @@ let touchstartX = 0;
 let touchendX   = 0;
 
 window.addEventListener('DOMContentLoaded', () => {
-    const saved = parseInt(localStorage.getItem('lastPage') || '2');
-    goToPage(saved >= 0 && saved < 4 ? saved : PAGE_GROUPES);
+    // Toujours démarrer sur Groupes — initApp() gère la navigation vers le dernier pintalk
+    goToPage(PAGE_GROUPES);
 
     const viewport = document.getElementById('viewport');
     if (viewport) {
@@ -20,6 +20,8 @@ window.addEventListener('DOMContentLoaded', () => {
         }, { passive: true });
         viewport.addEventListener('touchend', e => {
             if (e.target.closest('[id^="swipe-"]') || e.target.closest('[id^="bubble-"]')) return;
+            if (window._tileJustDragged) return;
+            if (window._swipeBlocked)   return;
             touchendX = e.changedTouches[0].screenX;
             handleGesture();
         }, { passive: true });
@@ -55,7 +57,7 @@ function goToPage(index) {
     if (index === PAGE_ARCHIVES && typeof initArchiveSelectors === 'function') initArchiveSelectors();
 
     // Alterner titre / tuiles postits dans l'entête
-    const hpt     = document.getElementById('header-postit-tabs');
+    const hpt     = document.getElementById('header-pintalk-tabs');
     const ptWrap  = document.getElementById('header-title-wrap');
     const spacer  = document.getElementById('header-spacer');
     const onChat  = (index === PAGE_CHAT);

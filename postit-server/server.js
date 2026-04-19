@@ -126,7 +126,11 @@ const Postit = mongoose.model('Postit', {
     imageUrl: String,
     // allowedEmails : si non vide, seuls ces emails + owner + admins/employés peuvent voir ce postit
     // Si vide → visible par tous les membres du groupe (comportement par défaut)
-    allowedEmails: { type: [String], default: [] }
+    allowedEmails:  { type: [String], default: [] },
+    tileColor:      { type: String, default: '' },
+    tileTextColor:  { type: String, default: '' },
+    tileShape:      { type: String, default: '' },
+    tileLogoUrl:    { type: String, default: '' },
 });
 
 const Message = mongoose.model('Message', { 
@@ -1022,6 +1026,10 @@ app.put('/api/postits/:id', async (req, res) => {
         if (phone       !== undefined) postit.phone       = phone;
         if (email       !== undefined) postit.email       = email;
         if (pickupDate  !== undefined) postit.pickupDate  = pickupDate;
+        if (req.body.tileColor     !== undefined) postit.tileColor     = req.body.tileColor;
+        if (req.body.tileTextColor !== undefined) postit.tileTextColor = req.body.tileTextColor;
+        if (req.body.tileShape     !== undefined) postit.tileShape     = req.body.tileShape;
+        if (req.body.tileLogoUrl   !== undefined) postit.tileLogoUrl   = req.body.tileLogoUrl;
         await postit.save();
 
         console.log(`[PUT] Postit modifié par ${userEmail} : ${postit.name}`);
