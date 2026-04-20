@@ -20,6 +20,8 @@ const io = new Server(server);
 const cloudinary = require('cloudinary'); 
 const multer = require('multer');
 const CloudinaryStorage = require('multer-storage-cloudinary');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 // 2. Ta configuration reste la même (elle configure l'objet global)
 cloudinary.v2.config({
@@ -57,7 +59,16 @@ const userSchema = new mongoose.Schema({
     firstname: { type: String, default: '' },
     lastname:  { type: String, default: '' },
     phone:     { type: String, default: '' },
-    lang:      { type: String, default: 'fr' },
+    lang:          { type: String, default: 'fr' },
+    phoneVerified: { type: Boolean, default: false },
+    prefs: {
+        type: Object,
+        default: () => ({
+            tilePrefs:   {},  // { [groupId]:   { color, textColor, shape } }
+            pintalkPrefs:{},  // { [postitId]:  { color, textColor, shape } }
+            groupsOrder: [],  // [id, id, ...]
+        })
+    },
 });
 
 const User = mongoose.model('User', userSchema);
@@ -312,6 +323,223 @@ app.put('/api/user/password', authenticateToken, async (req, res) => {
         if (!valid) return res.status(403).send('Mot de passe actuel incorrect');
         user.password = await bcrypt.hash(newPassword, 10);
         await user.save();
+        res.json({ ok: true });
+    } catch(e) { res.status(500).send('Erreur serveur'); }
+});
+
+
+// ── Codes de vérification en mémoire (à remplacer par Redis en prod) ─────────
+const _phoneCodes = new Map();   // email → { code, expires }
+const _inviteCodes = new Map();  // token → { email, groupId, expires }
+
+// ── Configurer le transport email ─────────────────────────────────────────────
+function _getMailTransport() {
+    return nodemailer.createTransport({
+        host:   process.env.SMTP_HOST   || 'smtp.gmail.com',
+        port:   parseInt(process.env.SMTP_PORT || '587'),
+        secure: false,
+        auth: {
+            user: process.env.SMTP_USER || '',
+            pass: process.env.SMTP_PASS || '',
+        },
+    });
+}
+
+// POST /api/invite — Inviter un utilisateur par email dans un groupe
+app.post('/api/invite', authenticateToken, async (req, res) => {
+    try {
+        const { email, groupId } = req.body;
+        const userEmail = req.user.email;
+        if (!email || !email.includes('@')) return res.status(400).send('Email invalide.');
+
+        const group = await Group.findById(groupId);
+        if (!group) return res.status(404).send('Groupe introuvable.');
+
+        // Seul owner/admin peut inviter
+        const isOwner = group.ownerEmail === userEmail;
+        if (!isOwner) {
+            const perm = await Permission.findOne({ groupId, guestEmail: userEmail });
+            if (!perm || perm.role !== 'admin') return res.status(403).send('Accès refusé.');
+        }
+
+        // Générer un token d'invitation
+        const token   = crypto.randomBytes(24).toString('hex');
+        const expires = Date.now() + 48 * 3600 * 1000; // 48h
+        _inviteCodes.set(token, { email, groupId, expires });
+
+        const appUrl  = process.env.APP_URL || 'http://localhost:3000';
+        const inviteUrl = `${appUrl}/join?token=${token}`;
+        const inviter = await User.findOne({ email: userEmail });
+        const inviterName = inviter?.firstname || inviter?.name || userEmail;
+
+        // Envoyer l'email
+        try {
+            const transport = _getMailTransport();
+            await transport.sendMail({
+                from: `"e-Postit Pro" <${process.env.SMTP_USER}>`,
+                to:   email,
+                subject: `${inviterName} vous invite sur e-Postit Pro`,
+                html: `
+                <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:2px solid #18181b;">
+                    <h2 style="font-weight:900;text-transform:uppercase;margin-bottom:8px;">Invitation</h2>
+                    <p><strong>${inviterName}</strong> vous invite à rejoindre le groupe <strong>"${group.name}"</strong> sur e-Postit Pro.</p>
+                    <p style="margin:20px 0;">
+                        <a href="${inviteUrl}" style="background:#18181b;color:#fff;padding:12px 24px;text-decoration:none;font-weight:900;text-transform:uppercase;display:inline-block;">
+                            Rejoindre le groupe →
+                        </a>
+                    </p>
+                    <p style="font-size:11px;opacity:0.5;">Ce lien expire dans 48h. Si vous n'avez pas de compte, il vous sera demandé d'en créer un.</p>
+                </div>`,
+            });
+            console.log(`[INVITE] Email envoyé à ${email} pour groupe ${group.name}`);
+        } catch(mailErr) {
+            console.error('[INVITE] Erreur email:', mailErr.message);
+            // On ne bloque pas : retourner le lien quand même
+        }
+
+        res.json({ ok: true, inviteUrl, token });
+    } catch(err) {
+        console.error('Erreur invite:', err);
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+// GET /api/join?token=... — Valider une invitation
+app.get('/api/join', async (req, res) => {
+    try {
+        const { token } = req.query;
+        const invite = _inviteCodes.get(token);
+        if (!invite || Date.now() > invite.expires) {
+            return res.redirect('/?error=invite_expired');
+        }
+        const group = await Group.findById(invite.groupId);
+        if (!group) return res.redirect('/?error=group_not_found');
+
+        // Rediriger vers l'app avec les infos d'invitation
+        res.redirect(`/?invite=${token}&email=${encodeURIComponent(invite.email)}&group=${encodeURIComponent(group.name)}`);
+    } catch(err) {
+        res.redirect('/?error=invite_error');
+    }
+});
+
+// POST /api/join — Finaliser l'invitation (après login/register)
+app.post('/api/join', authenticateToken, async (req, res) => {
+    try {
+        const { token } = req.body;
+        const invite = _inviteCodes.get(token);
+        if (!invite || Date.now() > invite.expires) return res.status(400).send('Invitation expirée.');
+
+        const userEmail = req.user.email;
+        const group = await Group.findById(invite.groupId);
+        if (!group) return res.status(404).send('Groupe introuvable.');
+
+        // Vérifier si déjà membre
+        const existing = await Permission.findOne({ groupId: invite.groupId, guestEmail: userEmail });
+        if (!existing) {
+            await Permission.create({ groupId: invite.groupId, guestEmail: userEmail, role: 'client' });
+        }
+
+        _inviteCodes.delete(token); // usage unique
+        console.log(`[JOIN] ${userEmail} a rejoint ${group.name} via invitation`);
+        res.json({ ok: true, groupId: invite.groupId, groupName: group.name });
+    } catch(err) {
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+// POST /api/send-phone-code — Envoyer un code SMS (stub : email fallback)
+app.post('/api/send-phone-code', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const { phone } = req.body;
+        if (!phone || phone.length < 8) return res.status(400).send('Numéro invalide.');
+
+        const code    = Math.floor(100000 + Math.random() * 900000).toString();
+        const expires = Date.now() + 10 * 60 * 1000; // 10min
+        _phoneCodes.set(userEmail, { code, phone, expires });
+
+        // Idéalement : envoyer via Twilio/OVH SMS
+        // Pour l'instant : envoyer le code par email à la place
+        try {
+            const transport = _getMailTransport();
+            await transport.sendMail({
+                from: `"e-Postit Pro" <${process.env.SMTP_USER}>`,
+                to:   userEmail,
+                subject: 'Code de vérification e-Postit Pro',
+                html: `<div style="font-family:sans-serif;padding:24px;border:2px solid #18181b;max-width:400px;">
+                    <h2 style="font-weight:900;">Code de vérification</h2>
+                    <p>Votre code pour vérifier le numéro <strong>${phone}</strong> :</p>
+                    <div style="font-size:32px;font-weight:900;letter-spacing:8px;margin:16px 0;">${code}</div>
+                    <p style="font-size:11px;opacity:0.5;">Valable 10 minutes.</p>
+                </div>`,
+            });
+        } catch(e) { console.warn('SMS email fallback failed:', e.message); }
+
+        console.log(`[PHONE] Code ${code} pour ${userEmail} (tel: ${phone})`);
+        res.json({ ok: true });
+    } catch(err) {
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+// POST /api/verify-phone — Valider le code reçu
+app.post('/api/verify-phone', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const { code }  = req.body;
+        const entry     = _phoneCodes.get(userEmail);
+
+        if (!entry || Date.now() > entry.expires) return res.status(400).send('Code expiré.');
+        if (entry.code !== code) return res.status(400).send('Code incorrect.');
+
+        // Marquer le téléphone comme vérifié
+        await User.findOneAndUpdate({ email: userEmail }, {
+            phone: entry.phone,
+            phoneVerified: true
+        });
+        _phoneCodes.delete(userEmail);
+        console.log(`[PHONE] Vérifié pour ${userEmail} : ${entry.phone}`);
+        res.json({ ok: true });
+    } catch(err) {
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+
+// ── Préférences utilisateur (prefs des tuiles, ordre des groupes) ─────────────
+app.get('/api/user/prefs', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findOne({ email: req.user.email });
+        if (!user) return res.status(404).send('Utilisateur introuvable');
+        res.json(user.prefs || { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] });
+    } catch(e) { res.status(500).send('Erreur serveur'); }
+});
+
+app.put('/api/user/prefs', authenticateToken, async (req, res) => {
+    try {
+        const { tilePrefs, pintalkPrefs, groupsOrder } = req.body;
+        const user = await User.findOne({ email: req.user.email });
+        if (!user) return res.status(404).send('Utilisateur introuvable');
+        const current = user.prefs || { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] };
+        if (tilePrefs    !== undefined) current.tilePrefs    = tilePrefs;
+        if (pintalkPrefs !== undefined) current.pintalkPrefs = pintalkPrefs;
+        if (groupsOrder  !== undefined) current.groupsOrder  = groupsOrder;
+        user.prefs = current;
+        user.markModified('prefs');
+        await user.save();
+        res.json({ ok: true });
+    } catch(e) { console.error('prefs PUT:', e); res.status(500).send('Erreur serveur'); }
+});
+
+// Quitter un groupe (membre uniquement)
+app.delete('/api/groups/:id/leave', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const group = await Group.findById(req.params.id);
+        if (!group) return res.status(404).send('Groupe introuvable.');
+        if (group.ownerEmail === userEmail) return res.status(403).send('Le propriétaire ne peut pas quitter son groupe. Supprimez-le.');
+        await Permission.deleteOne({ groupId: req.params.id, guestEmail: userEmail });
+        console.log(`[LEAVE] ${userEmail} a quitté ${group.name}`);
         res.json({ ok: true });
     } catch(e) { res.status(500).send('Erreur serveur'); }
 });

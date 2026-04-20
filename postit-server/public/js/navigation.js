@@ -54,6 +54,10 @@ function goToPage(index) {
 
     if (index !== PAGE_PREP) localStorage.setItem('lastPage', index);
     if (index === PAGE_GROUPES && typeof loadGroupsList === 'function') loadGroupsList();
+    if (index === PAGE_GROUPES && typeof _initPinchGestures === 'function') {
+        // Réinitialiser les gestures pinch à chaque visite de la page groupes
+        setTimeout(_initPinchGestures, 100);
+    }
     if (index === PAGE_ARCHIVES && typeof initArchiveSelectors === 'function') initArchiveSelectors();
 
     // Alterner titre / tuiles postits dans l'entête

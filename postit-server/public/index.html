@@ -108,9 +108,12 @@
                 <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">Email
                     <input type="email" id="prof-email" placeholder="Email" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                 </label>
-                <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:8px;">Téléphone
+                <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:4px;">Téléphone
                     <input type="tel" id="prof-phone" placeholder="Téléphone" data-i18n="phone" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                 </label>
+                <button onclick="uiVerifyPhone()" style="width:100%;padding:8px;border:2px solid rgba(0,0,0,0.2);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;margin-bottom:8px;">
+                    📱 Vérifier mon numéro
+                </button>
                 <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;margin-bottom:12px;">Langue
                     <select id="prof-lang" onchange="applyLang(this.value)" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                         <option value="fr">🇫🇷 Français</option>

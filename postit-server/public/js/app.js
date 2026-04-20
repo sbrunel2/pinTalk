@@ -269,10 +269,9 @@ function setDefaultTileShape(shape) {
     });
 
     // Appliquer la forme globale uniquement aux tuiles SANS forme individuelle
-    const _globalTileShapes = JSON.parse(localStorage.getItem('tileShapes') || '{}');
     document.querySelectorAll('#groups-grid [id^="tile-"]').forEach(tile => {
         const gid = tile.id.replace('tile-', '');
-        const indivShape = _globalTileShapes[gid] || null;
+        const indivShape = _userPrefs?.tilePrefs?.[gid]?.shape || null;
         if (indivShape) {
             // Tuile avec forme individuelle → appliquer SA forme
             const ri = indivShape === 'circle' ? '50%' : indivShape === 'rounded' ? '16px' : '0px';
@@ -429,6 +428,66 @@ if (currentUser) {
 // Ordre des groupes persisté
 let groupsOrder = JSON.parse(localStorage.getItem('groupsOrder') || '[]');
 
+// ── Préférences utilisateur (tuiles, ordre) ───────────────────────────────────
+// Chargées depuis le serveur, cachées en mémoire et localStorage
+let _userPrefs = null;  // { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] }
+
+async function _loadUserPrefs() {
+    // D'abord restaurer depuis localStorage (instantané)
+    const local = localStorage.getItem('userPrefs');
+    if (local) {
+        try { _userPrefs = JSON.parse(local); } catch(e) {}
+    }
+    if (!_userPrefs) _userPrefs = { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] };
+    // Restaurer l'ordre des groupes
+    if (_userPrefs.groupsOrder && _userPrefs.groupsOrder.length) {
+        groupsOrder = _userPrefs.groupsOrder;
+    }
+    // Puis charger depuis le serveur
+    try {
+        const res = await fetchAuth('/api/user/prefs');
+        if (res && res.ok) {
+            _userPrefs = await res.json();
+            if (!_userPrefs.tilePrefs)    _userPrefs.tilePrefs    = {};
+            if (!_userPrefs.pintalkPrefs) _userPrefs.pintalkPrefs = {};
+            if (!_userPrefs.groupsOrder)  _userPrefs.groupsOrder  = [];
+            if (_userPrefs.groupsOrder.length) groupsOrder = _userPrefs.groupsOrder;
+            localStorage.setItem('userPrefs', JSON.stringify(_userPrefs));
+        }
+    } catch(e) {}
+}
+
+async function _saveUserPrefs(partial) {
+    if (!_userPrefs) _userPrefs = { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] };
+    Object.assign(_userPrefs, partial);
+    localStorage.setItem('userPrefs', JSON.stringify(_userPrefs));
+    // Sauvegarder en arrière-plan (sans bloquer l'UI)
+    fetchAuth('/api/user/prefs', { method:'PUT', body: JSON.stringify(partial) })
+        .catch(e => console.warn('prefs save:', e));
+}
+
+function _getTilePref(id, key, fallback='') {
+    if (!_userPrefs) return fallback;
+    return (_userPrefs.tilePrefs?.[id]?.[key]) ?? fallback;
+}
+
+function _setPilePref(id, prefs) {
+    if (!_userPrefs) _userPrefs = { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] };
+    _userPrefs.tilePrefs[id] = { ...(_userPrefs.tilePrefs[id]||{}), ...prefs };
+    _saveUserPrefs({ tilePrefs: _userPrefs.tilePrefs });
+}
+
+function _getPintalkPref(id, key, fallback='') {
+    if (!_userPrefs) return fallback;
+    return (_userPrefs.pintalkPrefs?.[id]?.[key]) ?? fallback;
+}
+
+function _setPintalkPref(id, prefs) {
+    if (!_userPrefs) _userPrefs = { tilePrefs:{}, pintalkPrefs:{}, groupsOrder:[] };
+    _userPrefs.pintalkPrefs[id] = { ...(_userPrefs.pintalkPrefs[id]||{}), ...prefs };
+    _saveUserPrefs({ pintalkPrefs: _userPrefs.pintalkPrefs });
+}
+
 async function loadGroupsList() {
     const container = document.getElementById('groups-list-container');
     if (!container) return;
@@ -457,9 +516,11 @@ async function loadGroupsList() {
             return;
         }
         // Trier selon l'ordre mémorisé
+        // Ordre personnel de l'utilisateur
+        const _userOrder = (_userPrefs?.groupsOrder?.length ? _userPrefs.groupsOrder : groupsOrder);
         const ordered = [...groups].sort((a, b) => {
-            const ia = groupsOrder.indexOf(a._id);
-            const ib = groupsOrder.indexOf(b._id);
+            const ia = _userOrder.indexOf(a._id);
+            const ib = _userOrder.indexOf(b._id);
             if (ia === -1 && ib === -1) return 0;
             if (ia === -1) return 1; if (ib === -1) return -1;
             return ia - ib;
@@ -470,13 +531,16 @@ async function loadGroupsList() {
             const isActive = g._id === currentGroupId;
             const bg    = isActive ? 'var(--accent)' : '#fff';
             const color = isActive ? '#fff' : 'var(--accent)';
-            const canEdit = g.myRole === 'owner' || g.myRole === 'admin';
+            const canEdit = true; // Tout le monde voit la roue (contenu adapté selon rôle)
+            const canEditGroup = g.myRole === 'owner' || g.myRole === 'admin';
             const logoHtml = g.logoUrl
                 ? `<img src="${g.logoUrl}" style="width:28px;height:28px;object-fit:cover;border:1px solid rgba(0,0,0,0.1);margin-bottom:3px;pointer-events:none;user-select:none;" draggable="false">`
                 : `<div style="width:28px;height:28px;background:rgba(0,0,0,0.07);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;margin-bottom:3px;pointer-events:none;">${g.name[0].toUpperCase()}</div>`;
-            // Style de la tuile selon personnalisation
-            const tColor  = g.tileColor     || (isActive ? 'var(--accent)' : '#fff');
-            const tText   = g.tileTextColor || (isActive ? '#fff' : 'var(--accent)');
+            // Style de la tuile : préf utilisateur > propriétés du groupe > défaut
+            const _prefBg   = _userPrefs?.tilePrefs?.[g._id]?.color     || '';
+            const _prefText = _userPrefs?.tilePrefs?.[g._id]?.textColor || '';
+            const tColor  = isActive ? 'var(--accent)' : (_prefBg   || g.tileColor     || '#fff');
+            const tText   = isActive ? '#fff'          : (_prefText || g.tileTextColor || 'var(--accent)');
             const tShape  = g.tileShape     || 'rect';
             const tFont   = g.tileFontFamily|| '';
             const tFSize  = g.tileFontSize  || '8';
@@ -485,9 +549,8 @@ async function loadGroupsList() {
                 (tFont   ? `font-family:${tFont};` : '') +
                 (tFSize  ? `font-size:${tFSize}px;` : '');
 
-            // Forme : individuelle en priorité, puis globale
-            const _tileShapesMap = JSON.parse(localStorage.getItem('tileShapes') || '{}');
-            const _indivShape = _tileShapesMap[g._id] || null;
+            // Forme : préf utilisateur en priorité, puis globale
+            const _indivShape = _userPrefs?.tilePrefs?.[g._id]?.shape || null;
             const _ts  = _indivShape || window._currentTileShape || 'rect';
             const _tr  = _ts === 'circle' ? '50%' : _ts === 'rounded' ? '16px' : '0px';
             const tileW = _ts === 'circle' ? 'width:88px;height:88px;' : '';
@@ -564,7 +627,7 @@ function tileTouch(e, id) {
     if (_tileLongPress) clearTimeout(_tileLongPress);
     _tileLongPress = setTimeout(() => {
         if (!_tileMoved && _tileDragEl) {
-            if (navigator.vibrate) navigator.vibrate([30, 20, 50]);
+            _vibrate([30, 20, 50]);
             _tileDragEl.style.opacity = '0.4';
             const ghost = document.getElementById('tile-ghost');
             if (ghost) {
@@ -616,7 +679,7 @@ function tileTouchEnd(e, id) {
     if (_tileMoved) {
         e.preventDefault();
         e.stopPropagation();
-        if (navigator.vibrate) navigator.vibrate(20); // vibration relâcher
+        _vibrate(20); // vibration relâcher
         window._tileJustDragged = true;
         setTimeout(() => { window._tileJustDragged = false; }, 300);
 
@@ -632,6 +695,7 @@ function tileTouchEnd(e, id) {
                 allIds.splice(fi, 1); allIds.splice(ti, 0, _tileDragId);
                 groupsOrder = allIds;
                 localStorage.setItem('groupsOrder', JSON.stringify(groupsOrder));
+                _saveUserPrefs({ groupsOrder: allIds });
                 loadGroupsList();
             }
         }
@@ -680,9 +744,7 @@ function _applyShapeToTile(tile, shape) {
     }
     const groupId = tile.id.replace('tile-', '');
     if (groupId) {
-        const ts = JSON.parse(localStorage.getItem('tileShapes') || '{}');
-        ts[groupId] = shape;
-        localStorage.setItem('tileShapes', JSON.stringify(ts));
+        _setPilePref(groupId, { shape });
     }
 }
 
@@ -704,15 +766,15 @@ function _onGridTouch(e) {
             const ghost = document.getElementById('tile-ghost');
             if (ghost) ghost.style.opacity = '0';
 
-            // 1er doigt : détermine la tuile cible
-            const el1  = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
+            // 1er doigt : détermine la tuile cible (si sur une tuile)
+            const el1   = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
             const tile1 = el1?.closest('#groups-grid [id^="tile-"]') || null;
-            // 2e doigt : aussi vérifier
-            const el2  = document.elementFromPoint(e.touches[1].clientX, e.touches[1].clientY);
+            // 2e doigt
+            const el2   = document.elementFromPoint(e.touches[1].clientX, e.touches[1].clientY);
             const tile2 = el2?.closest('#groups-grid [id^="tile-"]') || null;
-            // Une tuile touchée par l'un ou l'autre → mode tuile individuelle
+            // Si AU MOINS UN doigt est sur une tuile → mode individuel sur cette tuile
             _pinchTile   = tile1 || tile2 || null;
-            _pinchGlobal = !_pinchTile;
+            _pinchGlobal = (_pinchTile === null); // true si aucun doigt sur une tuile
 
             _pinchStartDist = _getDist(e.touches[0], e.touches[1]);
             _pinchTriggered = false;
@@ -741,17 +803,16 @@ function _onGridTouch(e) {
             ? (window._currentTileShape || localStorage.getItem('tileShape') || 'rect')
             : _getTileShape(_pinchTile);
 
+        // Boucle : rect→rounded→circle→rect (pinch) / rect→circle→rounded→rect (spread)
         let nextShape;
         if (delta < 0) {
-            // Pinch → rect→rounded→circle
-            nextShape = curShape === 'rect' ? 'rounded' : curShape === 'rounded' ? 'circle' : null;
+            nextShape = curShape === 'rect' ? 'rounded' : curShape === 'rounded' ? 'circle' : 'rect';
         } else {
-            // Spread → circle→rounded→rect
-            nextShape = curShape === 'circle' ? 'rounded' : curShape === 'rounded' ? 'rect' : null;
+            nextShape = curShape === 'circle' ? 'rounded' : curShape === 'rounded' ? 'rect' : 'circle';
         }
 
-        if (nextShape && nextShape !== curShape) {
-            if (navigator.vibrate) navigator.vibrate(15);
+        if (nextShape !== curShape) {
+            _vibrate(15);
             if (_pinchGlobal) {
                 setDefaultTileShape(nextShape);
             } else {
@@ -774,19 +835,34 @@ function _onGridTouch(e) {
 }
 
 function _initPinchGestures() {
-    const grid = document.getElementById('groups-grid');
-    if (!grid || grid._pinchInited) return;
-    grid._pinchInited = true;
+    // Attacher sur le conteneur de la page Groupes (p2) pour capturer
+    // les touches dans les espaces entre les tuiles aussi
+    const container = document.getElementById('p2');
+    if (!container || container._pinchInited) return;
+    container._pinchInited = true;
     const opts = { passive: false, capture: true };
-    grid.addEventListener('touchstart',  _onGridTouch, opts);
-    grid.addEventListener('touchmove',   _onGridTouch, opts);
-    grid.addEventListener('touchend',    _onGridTouch, opts);
-    grid.addEventListener('touchcancel', _onGridTouch, opts);
+    container.addEventListener('touchstart',  _onGridTouch, opts);
+    container.addEventListener('touchmove',   _onGridTouch, opts);
+    container.addEventListener('touchend',    _onGridTouch, opts);
+    container.addEventListener('touchcancel', _onGridTouch, opts);
+}
+
+// Réinitialiser quand on revient sur la page groupes
+function _resetPinchInit() {
+    const container = document.getElementById('p2');
+    if (container) {
+        container._pinchInited = false;
+        // Retirer anciens listeners
+        container.removeEventListener('touchstart',  _onGridTouch, { capture: true });
+        container.removeEventListener('touchmove',   _onGridTouch, { capture: true });
+        container.removeEventListener('touchend',    _onGridTouch, { capture: true });
+        container.removeEventListener('touchcancel', _onGridTouch, { capture: true });
+    }
 }
 async function selectGroup(groupId) {
     if (window._tileJustDragged) return;
     // Vibration courte : confirmation de sélection du groupe
-    if (navigator.vibrate) navigator.vibrate(25);
+    _vibrate(25);
     currentGroupId = groupId;
     localStorage.setItem('lastGroupId', groupId); // mémoriser le dernier groupe visité
     localStorage.setItem('currentGroupId', groupId);
@@ -1043,11 +1119,36 @@ function editMessage(id) {
     textSpan.onblur = save;
 }
 
+// Vibration centralisée (Android uniquement - iOS ne supporte pas navigator.vibrate)
+function _vibrate(pattern) {
+    try {
+        if (navigator && navigator.vibrate) {
+            navigator.vibrate(pattern);
+        }
+    } catch(e) { /* silencieux */ }
+}
+
+function _redirectToLogin(reason) {
+    console.warn('Session expirée :', reason);
+    localStorage.removeItem('token');
+    // Afficher l'écran de login sans reload brutal
+    const authScreen = document.getElementById('auth-screen');
+    const appContent = document.getElementById('viewport');
+    const fixedHdr   = document.querySelector('.fixed-header');
+    const tabBar     = document.querySelector('.tab-bar');
+    if (authScreen) {
+        authScreen.style.display = 'flex';
+        if (typeof renderAuthForm === 'function') renderAuthForm();
+    }
+    if (appContent) appContent.style.display = 'none';
+    if (fixedHdr)   fixedHdr.style.display   = 'none';
+    if (tabBar)     tabBar.style.display      = 'none';
+}
+
 async function fetchAuth(url, options = {}) {
     const token = localStorage.getItem('token');
     if (!token) {
-        // Pas de token : rediriger vers login si pas déjà sur auth-screen
-        console.warn('fetchAuth: token manquant pour', url);
+        _redirectToLogin('token manquant');
         return new Response(JSON.stringify({message: 'Non authentifié'}), {status: 401});
     }
     const headers = {
@@ -1055,10 +1156,130 @@ async function fetchAuth(url, options = {}) {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
     };
-    return fetch(url, { ...options, headers });
+    let res;
+    try {
+        res = await fetch(url, { ...options, headers });
+    } catch(e) {
+        console.error('fetchAuth réseau:', e);
+        throw e;
+    }
+    // Token expiré ou invalide → retour au login
+    if (res.status === 401 || res.status === 403) {
+        const body = await res.text();
+        if (body.includes('xpiré') || body.includes('xpired') || body.includes('nvalide') || body.includes('nvalid') || res.status === 401) {
+            _redirectToLogin(body);
+            return new Response(JSON.stringify({message: 'Session expirée'}), {status: 401});
+        }
+    }
+    return res;
+}
+
+// ── Invitation par email ─────────────────────────────────────────────────────
+async function sendEmailInvite(groupId) {
+    const email = document.getElementById('new-member-email')?.value?.trim();
+    if (!email || !email.includes('@')) return alert('Entrez un email valide.');
+    try {
+        const res = await fetchAuth('/api/invite', { method:'POST', body: JSON.stringify({ email, groupId }) });
+        if (res.ok) {
+            const d = await res.json();
+            alert(`✅ Invitation envoyée à ${email}\n\nLien : ${d.inviteUrl}`);
+        } else alert('Erreur : ' + await res.text());
+    } catch(e) { alert('Erreur réseau.'); }
+}
+
+// ── Gestion du token d'invitation dans l'URL ──────────────────────────────────
+async function handleInviteToken() {
+    const params = new URLSearchParams(window.location.search);
+    const token  = params.get('invite');
+    const email  = params.get('email');
+    const group  = params.get('group');
+    const error  = params.get('error');
+
+    if (error) {
+        const msgs = { invite_expired:'Invitation expirée.', group_not_found:'Groupe introuvable.', invite_error:"Erreur d'invitation." };
+        alert(msgs[error] || 'Erreur.');
+        window.history.replaceState({}, '', '/');
+        return;
+    }
+    if (!token) return;
+
+    // Nettoyer l'URL
+    window.history.replaceState({}, '', '/');
+
+    // Si l'utilisateur est connecté → rejoindre directement
+    const storedToken = localStorage.getItem('token');
+    if (storedToken) {
+        try {
+            const res = await fetch('/api/join', {
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':`Bearer ${storedToken}`},
+                body: JSON.stringify({ token })
+            });
+            if (res.ok) {
+                const d = await res.json();
+                alert(`✅ Vous avez rejoint le groupe "${d.groupName}" !`);
+                await loadGroups(d.groupId);
+                loadGroupsList();
+            }
+        } catch(e) {}
+    } else {
+        // Mémoriser le token pour après connexion
+        localStorage.setItem('pendingInviteToken', token);
+        alert('Vous avez été invité(e) dans ce groupe. Connectez-vous ou créez un compte pour rejoindre.');
+    }
+}
+
+// ── Vérification téléphone ────────────────────────────────────────────────────
+async function uiVerifyPhone() {
+    const phone = document.getElementById('prof-phone')?.value?.trim();
+    if (!phone || phone.length < 8) return alert('Entrez votre numéro de téléphone.');
+
+    // Envoyer le code
+    try {
+        const res = await fetchAuth('/api/send-phone-code', { method:'POST', body: JSON.stringify({ phone }) });
+        if (!res.ok) return alert('Erreur : ' + await res.text());
+    } catch(e) { return alert('Erreur réseau.'); }
+
+    // Demander le code
+    const code = prompt('Un code a été envoyé à votre email.\nEntrez le code de vérification (6 chiffres) :');
+    if (!code) return;
+
+    try {
+        const res2 = await fetchAuth('/api/verify-phone', { method:'POST', body: JSON.stringify({ code }) });
+        if (res2.ok) {
+            alert('✅ Téléphone vérifié !');
+            document.getElementById('prof-phone')?.setAttribute('data-verified', 'true');
+        } else alert('Erreur : ' + await res2.text());
+    } catch(e) { alert('Erreur réseau.'); }
 }
 
 async function initApp() {
+    // Charger les préférences utilisateur (couleurs/formes/ordre des tuiles)
+    await _loadUserPrefs();
+
+    // Gérer les tokens d'invitation dans l'URL
+    handleInviteToken();
+
+    // Gérer les invitations en attente (après connexion)
+    const pendingToken = localStorage.getItem('pendingInviteToken');
+    if (pendingToken) {
+        localStorage.removeItem('pendingInviteToken');
+        try {
+            const storedToken = localStorage.getItem('token');
+            if (storedToken) {
+                const r = await fetch('/api/join', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json','Authorization':`Bearer ${storedToken}`},
+                    body: JSON.stringify({ token: pendingToken })
+                });
+                if (r.ok) {
+                    const d = await r.json();
+                    setTimeout(() => alert(`✅ Vous avez rejoint le groupe "${d.groupName}" !`), 1000);
+                }
+            }
+        } catch(e) {}
+    }
+
     socket = io({
         auth: {
             token: localStorage.getItem('token') 
@@ -1265,8 +1486,124 @@ async function uiEditGroup(groupId) {
         const res = await fetchAuth('/api/groups/' + groupId + '/config');
         if (!res.ok) return alert('Erreur chargement groupe');
         const g = await res.json();
-        _openGroupEditModal(groupId, g);
+        const isOwnerOrAdmin = g.myRole === 'owner' || g.myRole === 'admin';
+        if (isOwnerOrAdmin) {
+            _openGroupEditModal(groupId, g);
+        } else {
+            _openGroupMemberModal(groupId, g);
+        }
     } catch(e) { console.error(e); }
+}
+
+// Modal membre : personnalisation visuelle + quitter le groupe
+function _openGroupMemberModal(groupId, g) {
+    const pref      = _userPrefs?.tilePrefs?.[groupId] || {};
+    const curColor  = pref.color     || g.tileColor     || '#ffffff';
+    const curText   = pref.textColor || g.tileTextColor || '#18181b';
+    const curShape  = pref.shape     || window._currentTileShape || 'rect';
+
+    const shapeHtml = ['rect','rounded','circle'].map(s => {
+        const active = curShape === s;
+        const lbl = s==='rect'?'■ Rect':s==='rounded'?'▢ Arrondi':'● Cercle';
+        const br  = s==='circle'?'50%':s==='rounded'?'6px':'0';
+        return `<button onclick="selectGroupTileShape('${s}')" id="gm-member-pshape-${s}"
+            style="flex:1;padding:6px 3px;border:2px solid ${active?'var(--accent)':'rgba(0,0,0,0.15)'};
+                   background:${active?'var(--accent)':'white'};color:${active?'white':'#333'};
+                   font-size:8px;font-weight:900;cursor:pointer;border-radius:${br};text-transform:uppercase;">${lbl}</button>`;
+    }).join('');
+
+    const html = `
+    <div id="group-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:14px;overflow-y:auto;">
+      <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.4);padding:18px;width:100%;max-width:400px;margin-top:18px;">
+        <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:12px;">🎨 ${g.name}</h3>
+        <div style="font-size:8px;opacity:0.5;font-weight:900;text-transform:uppercase;margin-bottom:10px;">Apparence personnelle de cette tuile</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Fond
+            <input type="color" id="gm-member-bg" value="${curColor}"
+                   style="width:100%;height:28px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
+          </label>
+          <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Texte
+            <input type="color" id="gm-member-text" value="${curText}"
+                   style="width:100%;height:28px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
+          </label>
+        </div>
+
+        <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Forme</div>
+        <div style="display:flex;gap:5px;margin-bottom:12px;">${shapeHtml}</div>
+        <input type="hidden" id="gm-member-shape" value="${curShape}">
+
+        <button onclick="resetGroupMemberPrefToDefault('${groupId}')"
+            style="width:100%;padding:7px;border:2px solid rgba(0,0,0,0.2);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;margin-bottom:10px;">
+            ↺ Appliquer les paramètres par défaut
+        </button>
+
+        <div style="border-top:2px solid rgba(220,38,38,0.15);padding-top:8px;margin-bottom:10px;">
+          <button onclick="leaveGroup('${groupId}')"
+              style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">
+              🚪 Quitter ce groupe
+          </button>
+        </div>
+
+        <div style="display:flex;gap:8px;">
+          <button onclick="document.getElementById('group-modal').remove()"
+              style="flex:1;padding:11px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+          <button onclick="saveGroupMemberPrefs('${groupId}')"
+              style="flex:1;padding:11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Enregistrer</button>
+        </div>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function selectGroupTileShape(shape) {
+    const hidden = document.getElementById('gm-member-shape');
+    if (hidden) hidden.value = shape;
+    ['rect','rounded','circle'].forEach(s => {
+        const btn = document.getElementById('gm-member-pshape-' + s);
+        if (!btn) return;
+        const active = s === shape;
+        btn.style.borderColor = active ? 'var(--accent)' : 'rgba(0,0,0,0.15)';
+        btn.style.background  = active ? 'var(--accent)' : 'white';
+        btn.style.color       = active ? 'white' : '#333';
+    });
+}
+
+function resetGroupMemberPrefToDefault(groupId) {
+    const activeSkin = parseInt(localStorage.getItem('activeSkin') || '0');
+    const shape = window._currentTileShape || 'rect';
+    document.getElementById('gm-member-bg')?.setAttribute('value', activeSkin===2 ?
+        (document.documentElement.style.getPropertyValue('--custom-bg')||'#ffffff') : '#ffffff');
+    document.getElementById('gm-member-text')?.setAttribute('value', activeSkin===2 ?
+        (document.documentElement.style.getPropertyValue('--custom-text')||'#18181b') : '#18181b');
+    selectGroupTileShape(shape);
+    document.getElementById('gm-member-shape').value = '';
+}
+
+async function saveGroupMemberPrefs(groupId) {
+    const color     = document.getElementById('gm-member-bg')?.value    || '';
+    const textColor = document.getElementById('gm-member-text')?.value  || '';
+    const shape     = document.getElementById('gm-member-shape')?.value || '';
+    _setPilePref(groupId, { color, textColor, shape });
+    document.getElementById('group-modal')?.remove();
+    loadGroupsList();
+}
+
+async function leaveGroup(groupId) {
+    if (!confirm('Quitter ce groupe ?')) return;
+    document.getElementById('group-modal')?.remove();
+    const res = await fetchAuth('/api/groups/' + groupId + '/leave', { method:'DELETE' });
+    if (res.ok) {
+        // Supprimer les prefs locales pour ce groupe
+        if (_userPrefs?.tilePrefs?.[groupId]) {
+            delete _userPrefs.tilePrefs[groupId];
+            _saveUserPrefs({ tilePrefs: _userPrefs.tilePrefs });
+        }
+        currentGroupId = null;
+        localStorage.removeItem('lastGroupId');
+        await loadGroups();
+        loadGroupsList();
+    } else alert('Erreur : ' + await res.text());
 }
 
 function _openGroupEditModal(groupId, g) {
@@ -1302,6 +1639,10 @@ function _openGroupEditModal(groupId, g) {
                    style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:11px;background:white;box-sizing:border-box;">
             <button onclick="addMemberToMatrix('${groupId}')" style="padding:7px 11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;cursor:pointer;">+</button>
           </div>
+          <button onclick="sendEmailInvite('${groupId}')"
+              style="width:100%;padding:7px;margin-top:5px;border:2px solid var(--accent);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;">
+              ✉️ Envoyer une invitation par email
+          </button>
         </div>
         <!-- ── Personnalisation de la tuile ──────────────────── -->
         <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
@@ -1430,7 +1771,7 @@ function resetGroupTileToDefault() {
         if (bgEl) bgEl.value  = '#ffffff';
         if (txEl) txEl.value  = '#18181b';
     }
-    if (navigator.vibrate) navigator.vibrate(10);
+    _vibrate(10);
 }
 
 function selectTileShape(shape) {
@@ -1823,24 +2164,24 @@ function renderPostitTabs(postits, selectedId) {
         // Roue visible si proprio du postit OU owner/admin du groupe
         // Pour les autres : pas de roue (ils ne peuvent qu'ouvrir en lecture via tap sur la tuile si besoin)
         const isOwnerOfPostit = (currentUser && p.ownerEmail === currentUser.email) || isOwnerOrAdmin;
-        const _ptGearShape = window._currentTileShape || localStorage.getItem('tileShape') || 'rect';
+        const _ptGearShape = _userPrefs?.pintalkPrefs?.[p._id]?.shape || p.tileShape || window._currentTileShape || 'rect';
         const gearPos = _ptGearShape === 'circle'
             ? 'bottom:3px;left:50%;transform:translateX(-50%);'
             : 'bottom:2px;right:2px;';
-        const gear = isOwnerOfPostit
-            ? `<button onclick="event.stopPropagation(); uiEditPostit('${p._id}')"
+        // Roue visible pour tous (contenu du modal adapté selon rôle)
+        const gear = `<button onclick="event.stopPropagation(); uiEditPostit('${p._id}')"
                        style="position:absolute;${gearPos}background:none;border:none;
-                              font-size:10px;cursor:pointer;opacity:${isActive?'0.7':'0.4'};padding:1px;z-index:2;">⚙️</button>`
-            : '';
+                              font-size:10px;cursor:pointer;opacity:${isActive?'0.7':'0.4'};padding:1px;z-index:2;">⚙️</button>`;
 
-        // Forme individuelle de la tuile pintalk (sa propre ou la globale)
+        // Forme : préf utilisateur > prop pintalk > globale
         const _ptShapeGlobal = window._currentTileShape || localStorage.getItem('tileShape') || 'rect';
-        const _ptShape  = p.tileShape || _ptShapeGlobal;
+        const _ptShape  = (_userPrefs?.pintalkPrefs?.[p._id]?.shape) || p.tileShape || _ptShapeGlobal;
         const _ptRadius = _ptShape === 'circle' ? '50%' : _ptShape === 'rounded' ? '16px' : '0px';
         const ptSize    = _ptShape === 'circle' ? 'width:60px;height:60px;min-height:60px;' : 'width:70px;min-height:56px;';
-        // Couleurs individuelles ou celles de l'état actif/inactif
-        const ptBg    = isActive ? 'var(--accent)' : (p.tileColor    || '#fff');
-        const ptColor = isActive ? '#fff'          : (p.tileTextColor || 'var(--accent)');
+        // Couleurs : préf utilisateur > propriété pintalk > défaut
+        const _ptPref   = _userPrefs?.pintalkPrefs?.[p._id] || {};
+        const ptBg    = isActive ? 'var(--accent)' : (_ptPref.color     || p.tileColor     || '#fff');
+        const ptColor = isActive ? '#fff'          : (_ptPref.textColor || p.tileTextColor || 'var(--accent)');
         // Logo miniature
         const ptLogoHtml = p.tileLogoUrl
             ? `<img src="${p.tileLogoUrl}" style="width:24px;height:24px;object-fit:cover;border-radius:${_ptRadius==='50%'?'50%':'3px'};margin-bottom:3px;pointer-events:none;">`
@@ -1884,7 +2225,7 @@ function renderPostitTabs(postits, selectedId) {
 
 // ── Sélectionner un postit ────────────────────────────────────────────────────
 function selectPostit(postitId) {
-    if (navigator.vibrate) navigator.vibrate(20);
+    _vibrate(20);
     currentPostitId = postitId;
     const selPos = document.getElementById('sel-pos');
     if (selPos) selPos.value = postitId;
@@ -1988,6 +2329,118 @@ async function submitCreatePostit() {
 }
 
 // ── Éditer un postit (roue ⚙️) ───────────────────────────────────────────────
+// Modal pintalk pour les membres (couleur, forme, quitter)
+function _openPintalkMemberModal(postitId, p) {
+    const pref     = _userPrefs?.pintalkPrefs?.[postitId] || {};
+    const curColor = pref.color     || p.tileColor     || '#ffffff';
+    const curText  = pref.textColor || p.tileTextColor || '#18181b';
+    const curShape = pref.shape     || p.tileShape     || window._currentTileShape || 'rect';
+
+    const shapeHtml = ['rect','rounded','circle'].map(s => {
+        const active = curShape === s;
+        const lbl = s==='rect'?'■ Rect':s==='rounded'?'▢ Arrondi':'● Cercle';
+        const br  = s==='circle'?'50%':s==='rounded'?'6px':'0';
+        return `<button onclick="selectPintalkMemberShape('${s}')" id="ptm-pshape-${s}"
+            style="flex:1;padding:6px 3px;border:2px solid ${active?'var(--accent)':'rgba(0,0,0,0.15)'};
+                   background:${active?'var(--accent)':'white'};color:${active?'white':'#333'};
+                   font-size:8px;font-weight:900;cursor:pointer;border-radius:${br};text-transform:uppercase;">${lbl}</button>`;
+    }).join('');
+
+    const isGroupOwner = currentGroupConfig?.myRole === 'owner';
+    const html = `
+    <div id="pintalk-edit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:14px;overflow-y:auto;">
+      <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);padding:18px;width:100%;max-width:380px;margin-top:60px;">
+        <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:12px;">🎨 ${p.name}</h3>
+        <div style="font-size:8px;opacity:0.5;font-weight:900;text-transform:uppercase;margin-bottom:10px;">Apparence personnelle de ce pintalk</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Fond
+            <input type="color" id="ptm-bg" value="${curColor}" style="width:100%;height:26px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
+          </label>
+          <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Texte
+            <input type="color" id="ptm-text" value="${curText}" style="width:100%;height:26px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
+          </label>
+        </div>
+        <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Forme</div>
+        <div style="display:flex;gap:5px;margin-bottom:10px;">${shapeHtml}</div>
+        <input type="hidden" id="ptm-shape" value="${curShape}">
+
+        <button onclick="resetPintalkMemberPrefToDefault('${postitId}')"
+            style="width:100%;padding:7px;border:2px solid rgba(0,0,0,0.2);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;margin-bottom:10px;">
+            ↺ Appliquer les paramètres par défaut
+        </button>
+
+        <div style="border-top:2px solid rgba(220,38,38,0.15);padding-top:8px;margin-bottom:10px;">
+          ${isGroupOwner
+            ? `<button onclick="confirmDeletePostit('${postitId}')"
+                style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">
+                🗑️ Supprimer ce pintalk</button>`
+            : `<button onclick="leavePintalk('${postitId}')"
+                style="width:100%;padding:8px;background:#fff;color:#dc2626;border:2px solid #dc2626;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">
+                🚪 Quitter ce pintalk</button>`
+          }
+        </div>
+
+        <div style="display:flex;gap:8px;">
+          <button onclick="document.getElementById('pintalk-edit-modal').remove()"
+              style="flex:1;padding:11px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
+          <button onclick="savePintalkMemberPrefs('${postitId}')"
+              style="flex:1;padding:11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Enregistrer</button>
+        </div>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function selectPintalkMemberShape(shape) {
+    document.getElementById('ptm-shape').value = shape;
+    ['rect','rounded','circle'].forEach(s => {
+        const btn = document.getElementById('ptm-pshape-' + s);
+        if (!btn) return;
+        btn.style.borderColor = s===shape ? 'var(--accent)' : 'rgba(0,0,0,0.15)';
+        btn.style.background  = s===shape ? 'var(--accent)' : 'white';
+        btn.style.color       = s===shape ? 'white' : '#333';
+    });
+}
+
+function resetPintalkMemberPrefToDefault(postitId) {
+    const activeSkin = parseInt(localStorage.getItem('activeSkin') || '0');
+    const shape = window._currentTileShape || 'rect';
+    const bg   = activeSkin===2 ? (document.documentElement.style.getPropertyValue('--custom-bg')||'#ffffff') : '#ffffff';
+    const text = activeSkin===2 ? (document.documentElement.style.getPropertyValue('--custom-text')||'#18181b') : '#18181b';
+    const bgEl = document.getElementById('ptm-bg'); if(bgEl) bgEl.value = bg;
+    const txEl = document.getElementById('ptm-text'); if(txEl) txEl.value = text;
+    document.getElementById('ptm-shape').value = '';
+    selectPintalkMemberShape(shape);
+}
+
+async function savePintalkMemberPrefs(postitId) {
+    const color     = document.getElementById('ptm-bg')?.value    || '';
+    const textColor = document.getElementById('ptm-text')?.value  || '';
+    const shape     = document.getElementById('ptm-shape')?.value || '';
+    _setPintalkPref(postitId, { color, textColor, shape });
+    document.getElementById('pintalk-edit-modal')?.remove();
+    // Recharger les tuiles pintalk
+    const pid = currentPostitId;
+    renderPostitTabs(_cachedPostits, pid);
+}
+
+async function leavePintalk(postitId) {
+    if (!confirm('Quitter ce pintalk ? Vous ne pourrez plus y accéder.')) return;
+    document.getElementById('pintalk-edit-modal')?.remove();
+    // Retirer l'email de l'utilisateur des allowedEmails
+    const res = await fetchAuth('/api/postits/' + postitId + '/invite/' + encodeURIComponent(currentUser.email), { method:'DELETE' });
+    if (res.ok) {
+        // Supprimer prefs locales
+        if (_userPrefs?.pintalkPrefs?.[postitId]) {
+            delete _userPrefs.pintalkPrefs[postitId];
+            _saveUserPrefs({ pintalkPrefs: _userPrefs.pintalkPrefs });
+        }
+        currentPostitId = null;
+        await loadGroupData(currentGroupId);
+    } else alert('Erreur : ' + await res.text());
+}
+
 async function uiEditPostit(postitId) {
     document.getElementById('pintalk-edit-modal')?.remove();
     const p = _cachedPostits.find(x => x._id === postitId);
@@ -1998,8 +2451,13 @@ async function uiEditPostit(postitId) {
     const fmtDate      = p.pickupDate ? new Date(p.pickupDate).toISOString().slice(0,16) : '';
     const isOwnerOrAdmin = ['owner','admin'].includes(myRole);
     const isPostitOwner  = currentUser && p.ownerEmail === currentUser.email;
-    // Peut éditer : créateur du postit OU owner/admin du groupe
     const canEdit = isPostitOwner || isOwnerOrAdmin;
+
+    // Si simple membre (pas canEdit) → modal simplifié : couleur/forme/quitter
+    if (!canEdit && myRole !== 'employe') {
+        _openPintalkMemberModal(postitId, p);
+        return;
+    }
 
     // Champs : readonly si lecture seule
     const ro  = canEdit ? '' : 'readonly';
@@ -2146,7 +2604,7 @@ async function resetPintalkTileToDefault(postitId) {
     if (textEl)  textEl.value  = payload.tileTextColor || '#18181b';
     if (shapeEl) shapeEl.value = payload.tileShape     || '';
     selectPintalkShape(payload.tileShape || window._currentTileShape || 'rect');
-    if (navigator.vibrate) navigator.vibrate(10);
+    _vibrate(10);
     // Vider tileShape individuel pour cette tuile (la valeur vide = utilise défaut)
     // (sera effectif à la sauvegarde via submitEditPostit)
 }
