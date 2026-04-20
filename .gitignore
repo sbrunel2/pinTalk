@@ -9,3 +9,4 @@ postit-server/.env
 .vscode/
 *.hex
 *.bin
+postit-server/info.txt
