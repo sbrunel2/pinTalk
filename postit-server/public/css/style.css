@@ -364,3 +364,35 @@ body.has-bg-image .fixed-header { background: rgba(255,255,255,0.85); backdrop-f
 button, .btn-send, .btn-black, .btn-plus-3d, .skin-btn {
     border-radius: var(--btn-radius, 0px) !important;
 }
+
+/* ── Page Groupes : zones de swipe latérales ────────────────── */
+#p2 {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+}
+#groups-list-container {
+    /* Marges latérales = zones de swipe (doigt peut swiper sans toucher les tuiles) */
+    padding-left: 10px;
+    padding-right: 10px;
+}
+#groups-grid {
+    /* Pas de padding horizontal ici, géré par le container */
+    touch-action: pan-y pinch-zoom;
+}
+/* Les tuiles elles-mêmes bloquent le swipe horizontal → touch-action:none */
+/* Mais la zone hors tuile (marges) laisse passer le swipe */
+#groups-grid [id^="tile-"] {
+    touch-action: none;
+}
+/* Indicateurs visuels subtils que les bords sont des zones de swipe */
+#p2::before, #p2::after {
+    content: '';
+    position: fixed;
+    top: var(--header-h, 80px);
+    bottom: 65px;
+    width: 10px;
+    z-index: 10;
+    pointer-events: none;
+}
+#p2::before { left: 0; background: linear-gradient(to right, rgba(0,0,0,0.04), transparent); }
+#p2::after  { right: 0; background: linear-gradient(to left, rgba(0,0,0,0.04), transparent); }

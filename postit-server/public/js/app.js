@@ -499,8 +499,9 @@ async function loadGroupsList() {
         // Pas de groupes → afficher quand même la tuile "+"
         if (!groups.length) {
             const _r0 = window._currentTileRadius || '0px';
+            container.style.padding = '4px 12px 8px 12px';
             container.innerHTML = `<div id="groups-grid"
-                style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;">
+                style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;touch-action:pan-y;">
                 <div onclick="uiCreateGroup(event)"
                      style="display:flex;flex-direction:column;align-items:center;justify-content:center;
                             min-height:88px;cursor:pointer;
@@ -586,8 +587,10 @@ async function loadGroupsList() {
             <div style="font-size:7px;font-weight:900;text-transform:uppercase;">Nouveau</div>
         </div>`;
 
+        // Wrapper avec marges latérales = zones de swipe
+        container.style.padding = '4px 12px 8px 12px';
         container.innerHTML = `<div id="groups-grid"
-            style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;touch-action:none;">
+            style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:2px;touch-action:pan-y;">
             ${addTileHtml}${groupTilesHtml}
         </div>`;
         _ensureTileDragGhost();
@@ -1174,6 +1177,30 @@ async function fetchAuth(url, options = {}) {
     return res;
 }
 
+// ── Suppression de compte ────────────────────────────────────────────────────
+async function uiDeleteAccount() {
+    // Double confirmation
+    const c1 = confirm('⚠️ ATTENTION\n\nVous allez supprimer définitivement votre compte et TOUTES vos données.\n\nCette action est IRRÉVERSIBLE.\n\nContinuer ?');
+    if (!c1) return;
+    const c2 = confirm('DERNIÈRE CONFIRMATION\n\nToutes vos données seront effacées : groupes, pintalk, messages, profil.\n\nÊtes-vous absolument certain(e) ?');
+    if (!c2) return;
+
+    try {
+        const res = await fetchAuth('/api/user/account', { method: 'DELETE' });
+        if (res.ok) {
+            // Effacer tout le localStorage
+            localStorage.clear();
+            // Retourner à l'écran de login
+            _redirectToLogin('compte supprimé');
+            alert('Votre compte a été supprimé. Au revoir !');
+        } else {
+            alert('Erreur : ' + await res.text());
+        }
+    } catch(e) {
+        alert('Erreur réseau.');
+    }
+}
+
 // ── Invitation par email ─────────────────────────────────────────────────────
 async function sendEmailInvite(groupId) {
     const email = document.getElementById('new-member-email')?.value?.trim();
@@ -1639,10 +1666,7 @@ function _openGroupEditModal(groupId, g) {
                    style="flex:1;border:2px solid rgba(0,0,0,0.15);padding:7px;font-size:11px;background:white;box-sizing:border-box;">
             <button onclick="addMemberToMatrix('${groupId}')" style="padding:7px 11px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;cursor:pointer;">+</button>
           </div>
-          <button onclick="sendEmailInvite('${groupId}')"
-              style="width:100%;padding:7px;margin-top:5px;border:2px solid var(--accent);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;">
-              ✉️ Envoyer une invitation par email
-          </button>
+
         </div>
         <!-- ── Personnalisation de la tuile ──────────────────── -->
         <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:9px;margin-bottom:9px;">
@@ -1741,8 +1765,18 @@ async function addMemberToMatrix(groupId) {
     const email = document.getElementById('new-member-email')?.value?.trim();
     if (!email || !email.includes('@')) return alert('Email invalide.');
     const res = await fetchAuth('/api/groups/' + groupId + '/members', { method:'POST', body: JSON.stringify({ email, role: 'client' }) });
-    if (res.ok) { document.getElementById('new-member-email').value = ''; loadMembersMatrix(groupId, currentGroupConfig?.isPro); }
-    else { const t = await res.text(); alert(t.includes('déjà') ? 'Déjà membre.' : 'Erreur : ' + t); }
+    if (res.status === 202) {
+        // Utilisateur inconnu → invitation envoyée automatiquement
+        document.getElementById('new-member-email').value = '';
+        alert(`✉️ ${email} n'a pas encore de compte Pintalk.
+Une invitation lui a été envoyée par email automatiquement.`);
+    } else if (res.ok) {
+        document.getElementById('new-member-email').value = '';
+        loadMembersMatrix(groupId, currentGroupConfig?.isPro);
+    } else {
+        const t = await res.text();
+        alert(t.includes('déjà') ? 'Déjà membre.' : 'Erreur : ' + t);
+    }
 }
 async function setMemberRole(groupId, email, role) {
     await fetchAuth('/api/groups/' + groupId + '/members/' + encodeURIComponent(email), { method:'PUT', body: JSON.stringify({ role }) });
@@ -3004,35 +3038,56 @@ async function refreshView(forceScrollBottom = false) {
                     ${cancelCommentHtml}
                 </div>`;
 
-                prepHeaderHtml = `
-                <div class="p-3 border-4 border-black bg-white shadow-[4px_4px_0px_#000]">
-                    <div class="flex justify-between items-start border-b-2 border-black pb-2 mb-2">
-                        <div>
-                            <div class="flex items-center gap-2 mb-1">
-                                <span class="text-[10px] font-black uppercase opacity-40">Statut</span>
-                                ${getStatusSelect('text-[8px]')}
+                const isPro = currentGroupConfig?.isPro;
+                const groupName  = currentGroupConfig?.name  || '';
+                const userName   = currentUser?.name || currentUser?.firstname || '';
+
+                if (isPro) {
+                    // Groupe PRO : entête complet avec statut, N° commande, client, date
+                    prepHeaderHtml = `
+                    <div class="p-3 border-4 border-black bg-white shadow-[4px_4px_0px_#000]">
+                        <div class="flex justify-between items-start border-b-2 border-black pb-2 mb-2">
+                            <div>
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-[10px] font-black uppercase opacity-40">Statut</span>
+                                    ${getStatusSelect('text-[8px]')}
+                                </div>
+                                <div class="text-3xl font-black italic leading-none text-red-600">#${p.orderNumber || '---'}</div>
                             </div>
-                            <div class="text-3xl font-black italic leading-none text-red-600">#${p.orderNumber || '---'}</div>
+                            <button onclick="goToPage(PAGE_CHAT)" class="bg-blue-50 text-blue-600 p-3 border-2 border-blue-200 shadow-[2px_2px_0px_#bfdbfe] flex items-center justify-center active:shadow-none active:translate-x-[1px] active:translate-y-[1px]">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 1 1 0 8h-1"/>
+                                </svg>
+                            </button>
                         </div>
-                        
-                        <button onclick="goToPage(PAGE_CHAT)" class="bg-blue-50 text-blue-600 p-3 border-2 border-blue-200 shadow-[2px_2px_0px_#bfdbfe] flex items-center justify-center active:shadow-none active:translate-x-[1px] active:translate-y-[1px]">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 1 1 0 8h-1"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="flex justify-between items-end">
-                        <div>
-                            <span class="text-[10px] font-black uppercase opacity-40 block">Client</span>
-                            <span class="text-xl font-black leading-none">${p.name}</span>
-                            <div class="text-sm font-black mt-1 text-blue-600">
-                                ${p.phone ? `📞 <a href="tel:${p.phone}" onclick="return confirm('Lancer l'appel vers le ${p.phone} ?')" class="underline">${p.phone}</a>` : ''}
+                        <div class="flex justify-between items-end">
+                            <div>
+                                <span class="text-[10px] font-black uppercase opacity-40 block">Client</span>
+                                <span class="text-xl font-black leading-none">${p.name}</span>
+                                <div class="text-sm font-black mt-1 text-blue-600">
+                                    ${p.phone ? `📞 <a href="tel:${p.phone}" onclick="return confirm('Lancer l\'appel vers le ${p.phone} ?')" class="underline">${p.phone}</a>` : ''}
+                                </div>
                             </div>
+                            <div class="text-right text-[12px] font-black">${formattedDate}</div>
                         </div>
-                        <div class="text-right text-[12px] font-black">${formattedDate}</div>
-                    </div>
-                    ${cancelCommentHtml}
-                </div>`;
+                        ${cancelCommentHtml}
+                    </div>`;
+                } else {
+                    // Groupe PERSO : entête simplifié — groupe / pintalk / utilisateur connecté
+                    prepHeaderHtml = `
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                padding:8px 10px;border-bottom:2px solid var(--accent);background:var(--bg);">
+                        <div>
+                            <div style="font-size:8px;font-weight:900;text-transform:uppercase;opacity:0.4;line-height:1;">${groupName}</div>
+                            <div style="font-size:16px;font-weight:900;line-height:1.2;">${p.name}</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <div style="font-size:9px;font-weight:900;opacity:0.45;text-transform:uppercase;">👤 ${userName}</div>
+                            <button onclick="goToPage(PAGE_CHAT)"
+                                style="background:var(--accent);color:white;border:none;padding:6px 8px;font-size:12px;cursor:pointer;">←</button>
+                        </div>
+                    </div>`;
+                }
             }
         } catch (e) { console.error(e); }
     }

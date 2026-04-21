@@ -9,6 +9,27 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const rateLimit    = require('express-rate-limit');
+
+
+// ── Rate limiting — anti brute-force ──────────────────────────────────────────
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,  // 15 minutes
+    max: 20,                     // 20 tentatives max
+    message: { message: 'Trop de tentatives. Réessayez dans 15 minutes.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+const apiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,   // 1 minute
+    max: 120,                    // 120 req/min
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// ── CORS ──────────────────────────────────────────────────────────────────────
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
+
 
 // --- À AJOUTER EN HAUT AVEC LES AUTRES REQUIRES ---
 //const multer = require('multer');
@@ -20,17 +41,12 @@ const io = new Server(server);
 const cloudinary = require('cloudinary'); 
 const multer = require('multer');
 const CloudinaryStorage = require('multer-storage-cloudinary');
-const nodemailer = require('nodemailer');
-const crypto = require('crypto');
+const nodemailer   = require('nodemailer');
+const crypto       = require('crypto');
+const bcrypt       = require('bcryptjs');
+const helmet       = require('helmet');
 
-// 2. Ta configuration reste la même (elle configure l'objet global)
-cloudinary.v2.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
 
-// 3. C'est ICI que ça se joue : on passe l'objet racine 'cloudinary'
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary, // On passe l'objet complet, PAS cloudinary.v2
   params: {
@@ -42,11 +58,6 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({ storage: storage });
 
-app.use(express.json());
-app.use(express.static('public'));
-//app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-//mongoose.connect('mongodb://localhost:27017/postit_pro_v2');
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/postit_pro_v2';
 mongoose.connect(MONGO_URI)
   .then(() => console.log("✅ Connecté à MongoDB"))
@@ -165,6 +176,39 @@ const Archive = mongoose.model('Archive', {
     adminId: String 
 });
 
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+});
+
+app.use('/api', apiLimiter);
+// ── Sécurité HTTP headers (RGPD / OWASP) ─────────────────────────────────────
+app.use(helmet({
+    contentSecurityPolicy: false, // Désactivé pour permettre les assets CDN (Tailwind etc.)
+    crossOriginEmbedderPolicy: false,
+}));
+
+// 2. Ta configuration reste la même (elle configure l'objet global)
+cloudinary.v2.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// 3. C'est ICI que ça se joue : on passe l'objet racine 'cloudinary'
+app.use(express.json());
+app.use(express.static('public'));
+//app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+//mongoose.connect('mongodb://localhost:27017/postit_pro_v2');
+
 function generateJoinCode() {
     // Génère un code de 6 caractères (ex: 7X8Y2Z)
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -172,7 +216,7 @@ function generateJoinCode() {
 
 // --- ROUTES API ---
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -181,7 +225,24 @@ app.post('/api/login', async (req, res) => {
 
         // 2. VÉRIFICATION : Si l'user n'existe pas OU si le password est faux
         // On renvoie la même erreur pour ne pas aider les hackers
-        if (!user || user.password !== password) {
+        if (!user) {
+            return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+        }
+        // Vérifier le mot de passe hashé
+        let validPwd = false;
+        if (user.password.startsWith('$2')) {
+            // Mot de passe hashé bcrypt
+            validPwd = await bcrypt.compare(password, user.password);
+        } else {
+            // Ancien mot de passe en clair (migration) → valider et hasher
+            validPwd = (user.password === password);
+            if (validPwd) {
+                user.password = await bcrypt.hash(password, 12);
+                await user.save();
+                console.log(`[SECURITY] Mot de passe migré vers bcrypt pour ${user.email}`);
+            }
+        }
+        if (!validPwd) {
             return res.status(401).json({ message: "Email ou mot de passe incorrect" });
         }
 
@@ -206,7 +267,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', authLimiter, async (req, res) => {
     try {
         const { name, firstname, lastname, email, password, phone, lang } = req.body;
 
@@ -217,12 +278,15 @@ app.post('/api/register', async (req, res) => {
         }
 
         // 2. Créer le nouvel utilisateur (sans groupe ni postit par défaut)
+        // Hasher le mot de passe
+        const hashedPwd = await bcrypt.hash(password, 12);
+
         const newUser = new User({
             name:      name || email.split('@')[0],
             firstname: firstname || '',
             lastname:  lastname  || '',
             email,
-            password,
+            password: hashedPwd,
             phone: phone || '',
             lang:  lang  || 'fr',
         });
@@ -318,7 +382,6 @@ app.put('/api/user/password', authenticateToken, async (req, res) => {
         if (!currentPassword || !newPassword) return res.status(400).send('Champs manquants');
         const user = await User.findOne({ email: req.user.email });
         if (!user) return res.status(404).send('Utilisateur introuvable');
-        const bcrypt = require('bcryptjs');
         const valid = await bcrypt.compare(currentPassword, user.password);
         if (!valid) return res.status(403).send('Mot de passe actuel incorrect');
         user.password = await bcrypt.hash(newPassword, 10);
@@ -334,16 +397,41 @@ const _inviteCodes = new Map();  // token → { email, groupId, expires }
 
 // ── Configurer le transport email ─────────────────────────────────────────────
 function _getMailTransport() {
+    const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+    const port = parseInt(process.env.SMTP_PORT || '587');
+    const user = process.env.SMTP_USER || '';
+    const pass = process.env.SMTP_PASS || '';
+
+    if (!user || !pass) {
+        console.warn('[EMAIL] SMTP_USER ou SMTP_PASS non configuré dans .env');
+    }
+
+    // Pour Gmail avec 2FA : SMTP_PASS doit être un "mot de passe d'application"
+    // Gmail > Compte > Sécurité > Authentification 2 facteurs > Mots de passe des applications
+    // Générer un mot de passe de 16 caractères et le mettre dans SMTP_PASS
+    //
+    // Alternatively, use SMTP_HOST=smtp.mailgun.org or smtp.sendgrid.net
+
     return nodemailer.createTransport({
-        host:   process.env.SMTP_HOST   || 'smtp.gmail.com',
-        port:   parseInt(process.env.SMTP_PORT || '587'),
-        secure: false,
-        auth: {
-            user: process.env.SMTP_USER || '',
-            pass: process.env.SMTP_PASS || '',
-        },
+        host,
+        port,
+        secure: port === 465,  // true pour 465, false pour 587
+        auth: { user, pass },
+        tls: { rejectUnauthorized: false },  // tolère les certs auto-signés en dev
     });
 }
+
+// Vérifier la config email au démarrage
+setTimeout(() => {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        console.warn('⚠️  [EMAIL] SMTP non configuré — les emails ne seront pas envoyés.');
+        console.warn('   Ajoutez SMTP_USER et SMTP_PASS dans votre fichier .env');
+        console.warn('   Gmail avec 2FA : utilisez un "mot de passe d\'application" (16 chars)');
+        console.warn('   Gmail > Compte > Sécurité > Mots de passe des applications');
+    } else {
+        console.log(`✅ [EMAIL] SMTP configuré : ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} (${process.env.SMTP_USER})`);
+    }
+}, 1000);
 
 // POST /api/invite — Inviter un utilisateur par email dans un groupe
 app.post('/api/invite', authenticateToken, async (req, res) => {
@@ -542,6 +630,57 @@ app.delete('/api/groups/:id/leave', authenticateToken, async (req, res) => {
         console.log(`[LEAVE] ${userEmail} a quitté ${group.name}`);
         res.json({ ok: true });
     } catch(e) { res.status(500).send('Erreur serveur'); }
+});
+
+
+// ── Suppression de compte ──────────────────────────────────────────────────────
+app.delete('/api/user/account', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        console.log(`[DELETE ACCOUNT] Début suppression pour ${userEmail}`);
+
+        // 1. Trouver tous les groupes dont l'user est propriétaire
+        const ownedGroups = await Group.find({ ownerEmail: userEmail });
+
+        for (const group of ownedGroups) {
+            // Si groupe Pro avec abonnement actif → noter pour annulation Stripe future
+            if (group.isPro && group.subscriptionStatus === 'active' && group.stripeSubscriptionId) {
+                // TODO: await stripe.subscriptions.cancel(group.stripeSubscriptionId);
+                console.log(`[DELETE ACCOUNT] Abonnement Stripe à annuler: ${group.stripeSubscriptionId}`);
+            }
+
+            // Supprimer tous les devices du groupe
+            const devices = await Device.find({ groupId: group._id });
+            for (const device of devices) {
+                await Postit.deleteMany({ deviceId: device._id });
+                await Message.deleteMany({ deviceId: device._id });
+            }
+            await Device.deleteMany({ groupId: group._id });
+            await Message.deleteMany({ groupId: group._id });
+            await Permission.deleteMany({ groupId: group._id.toString() });
+            await Archive.deleteMany({ adminId: userEmail });
+        }
+        await Group.deleteMany({ ownerEmail: userEmail });
+
+        // 2. Supprimer les participations (groupes dont l'user est membre)
+        await Permission.deleteMany({ guestEmail: userEmail });
+
+        // 3. Supprimer les postits créés par l'user (dans les groupes d'autres)
+        const userPostits = await Postit.find({ ownerEmail: userEmail });
+        for (const p of userPostits) {
+            await Message.deleteMany({ postitId: p._id.toString() });
+        }
+        await Postit.deleteMany({ ownerEmail: userEmail });
+
+        // 4. Supprimer le compte utilisateur
+        await User.deleteOne({ email: userEmail });
+
+        console.log(`[DELETE ACCOUNT] Compte ${userEmail} supprimé complètement.`);
+        res.json({ ok: true });
+    } catch(err) {
+        console.error('[DELETE ACCOUNT] Erreur:', err);
+        res.status(500).send('Erreur lors de la suppression du compte.');
+    }
 });
 
 
@@ -1128,9 +1267,44 @@ app.post('/api/groups/:id/members', async (req, res) => {
             if (!adminPerm) return res.status(403).send("Accès refusé.");
         }
 
-        // Vérifier que l'utilisateur invité existe
+        // Vérifier si l'utilisateur existe
         const invitedUser = await User.findOne({ email });
-        if (!invitedUser) return res.status(404).send("Utilisateur introuvable.");
+        if (!invitedUser) {
+            // Utilisateur inconnu → envoyer une invitation par email automatiquement
+            // Générer un token d'invitation
+            const invToken = require('crypto').randomBytes(24).toString('hex');
+            const invExpires = Date.now() + 48 * 3600 * 1000;
+            _inviteCodes.set(invToken, { email, groupId, expires: invExpires });
+
+            const appUrl = process.env.APP_URL || `http://${require('os').hostname()}:3000`;
+            const inviteUrl = `${appUrl}/join?token=${invToken}`;
+            const inviter = await User.findOne({ email: userEmail });
+            const inviterName = inviter?.firstname || inviter?.name || userEmail;
+
+            try {
+                const transport = _getMailTransport();
+                await transport.sendMail({
+                    from: `"Pintalk" <${process.env.SMTP_USER}>`,
+                    to:   email,
+                    subject: `${inviterName} vous invite sur Pintalk`,
+                    html: `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:2px solid #18181b;">
+                        <h2 style="font-weight:900;text-transform:uppercase;">Invitation Pintalk</h2>
+                        <p><strong>${inviterName}</strong> vous invite à rejoindre le groupe <strong>"${group.name}"</strong>.</p>
+                        <p style="margin:20px 0;">
+                            <a href="${inviteUrl}" style="background:#18181b;color:#fff;padding:12px 24px;text-decoration:none;font-weight:900;text-transform:uppercase;display:inline-block;">
+                                Rejoindre →
+                            </a>
+                        </p>
+                        <p style="font-size:11px;opacity:0.5;">Lien valable 48h. Vous devrez créer un compte Pintalk.</p>
+                    </div>`,
+                });
+                console.log(`[INVITE AUTO] Email envoyé à ${email}`);
+            } catch(mailErr) {
+                console.error('[INVITE AUTO] Erreur email:', mailErr.message);
+            }
+            // Retourner 202 = invitation envoyée (pas encore membre)
+            return res.status(202).json({ invited: true, email, inviteUrl });
+        }
 
         // Vérifier qu'il n'est pas déjà membre
         const existing = await Permission.findOne({ groupId, guestEmail: email });
