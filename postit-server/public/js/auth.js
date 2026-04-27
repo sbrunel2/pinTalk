@@ -190,11 +190,38 @@ async function handleAuth() {
 
         if (res.ok) {
             const data = await res.json();
-            localStorage.setItem('user', JSON.stringify(data.user));
-            if (data.token) localStorage.setItem('token', data.token);
-            // Mémoriser la langue
-            if (data.user?.lang) localStorage.setItem('lang', data.user.lang);
-            window.location.href = '/';
+            currentUser = data.user;
+            localStorage.setItem('user',  JSON.stringify(data.user));
+            localStorage.setItem('token', data.token);
+            if (data.user?.lang) {
+                localStorage.setItem('lang', data.user.lang);
+                if (typeof applyLang === 'function') applyLang(data.user.lang);
+            }
+
+            // Masquer l'auth-screen
+            const authScreen = document.getElementById('auth-screen');
+            if (authScreen) { authScreen.style.display = 'none'; authScreen.classList.add('hidden'); }
+
+            // Afficher viewport, header, tab-bar
+            const vp   = document.getElementById('viewport');
+            const hdr  = document.querySelector('.fixed-header');
+            const tabs = document.querySelector('.tab-bar');
+            if (vp)   vp.style.display   = 'flex';
+            if (hdr)  hdr.style.display  = 'flex';
+            if (tabs) tabs.style.display = 'flex';
+
+            // Lancer l'application
+            if (typeof initApp === 'function') {
+                try { await initApp(); } catch(e) { console.error('initApp error:', e); }
+            }
+            // Aller sur la page des groupes et charger la liste
+            const targetPage = (typeof PAGE_GROUPES !== 'undefined') ? PAGE_GROUPES : 2;
+            if (typeof goToPage === 'function') goToPage(targetPage);
+            // Forcer le chargement de la grille des groupes
+            if (typeof loadGroupsList === 'function') {
+                setTimeout(() => loadGroupsList(), 100);
+            }
+
         } else {
             const err = await res.json().catch(() => ({ message: res.statusText }));
             alert(err.message || 'Erreur');

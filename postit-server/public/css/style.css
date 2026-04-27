@@ -145,6 +145,7 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 .tab-item.active { opacity: 1; }
 
 #auth-screen { position: fixed; inset: 0; background: var(--bg); z-index: 9999; padding: 40px; display: flex; flex-direction: column; justify-content: center; }
+#auth-screen.hidden { display: none !important; }
 .hidden { display: none !important; }
 #auth-screen input { margin-bottom: 20px !important; }
 
@@ -396,3 +397,12 @@ button, .btn-send, .btn-black, .btn-plus-3d, .skin-btn {
 }
 #p2::before { left: 0; background: linear-gradient(to right, rgba(0,0,0,0.04), transparent); }
 #p2::after  { right: 0; background: linear-gradient(to left, rgba(0,0,0,0.04), transparent); }
+
+/* ── Bouton micro : animation pulse ─────────────────────────── */
+@keyframes micPulse {
+    0%   { opacity: 1;   transform: scale(1);    }
+    50%  { opacity: 0.4; transform: scale(1.3);  }
+    100% { opacity: 1;   transform: scale(1);    }
+}
+#btn-mic.recording { background: #fee2e2 !important; }
+#btn-mic.recording #mic-icon { color: #dc2626; }

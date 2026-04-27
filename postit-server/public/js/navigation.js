@@ -59,6 +59,7 @@ function goToPage(index) {
         setTimeout(_initPinchGestures, 100);
     }
     if (index === PAGE_ARCHIVES && typeof initArchiveSelectors === 'function') initArchiveSelectors();
+    if (index === PAGE_PARAMS && typeof loadProfile === 'function') loadProfile();
 
     // Alterner titre / tuiles postits dans l'entête
     const hpt     = document.getElementById('header-pintalk-tabs');

@@ -684,6 +684,134 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
 });
 
 
+// ── IA : extraction d'éléments via Gemini ─────────────────────────────────────
+// ── Helpers IA ─────────────────────────────────────────────────────────────────
+function _fallbackExtract(text) {
+    return text
+        .split(/,|;| et | puis | aussi | avec /i)
+        .map(s => s.replace(/^(pense\s+à|il\s+faut|acheter|prendre|ramener|ajouter)\s+/i, '').trim())
+        .filter(s => s.length > 1);
+}
+
+// ── IA multi-items via Gemini ───────────────────────────────────────────────────
+app.post('/api/ai/extract-multi', authenticateToken, async (req, res) => {
+    try {
+        const { text } = req.body;
+        if (!text || text.length < 2) return res.status(400).send('Texte vide.');
+
+        const geminiKey = process.env.GEMINI_API_KEY;
+        if (!geminiKey) {
+            return res.json({ items: _fallbackExtract(text), source: 'fallback' });
+        }
+
+        const safeText = text.replace(/"/g, "'").substring(0, 300);
+        const prompt = `Tu es un assistant qui extrait des produits ou éléments concrets d'un message.
+Regles STRICTES :
+- Reponds UNIQUEMENT avec un tableau JSON valide, sans markdown ni backticks
+- Chaque element est un string avec quantite si presente
+- Exemples corrects : ["pain","3 croissants"] ou ["300g viande hachee","2 steaks"]
+- Si aucun produit identifiable : reponds []
+- Minuscules, inclure les quantites
+Message : "${safeText}"`;
+
+        const gRes = await fetch(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + geminiKey,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { maxOutputTokens: 150, temperature: 0.1 }
+                })
+            }
+        );
+
+        if (!gRes.ok) {
+            return res.json({ items: _fallbackExtract(text), source: 'fallback' });
+        }
+
+        const gData = await gRes.json();
+        const raw = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '[]';
+        let items = [];
+        try {
+            const clean = raw.replace(/```json|```/g, '').trim();
+            items = JSON.parse(clean);
+            if (!Array.isArray(items)) items = [];
+        } catch(e) {
+            items = _fallbackExtract(text);
+        }
+        items = items.filter(i => typeof i === 'string' && i.trim().length > 1);
+        console.log('[GEMINI] ' + items.length + ' items extraits de "' + text.substring(0,40) + '"');
+        res.json({ items, source: items.length ? 'gemini' : 'none' });
+
+    } catch(err) {
+        console.error('[AI EXTRACT-MULTI]', err.message);
+        res.json({ items: _fallbackExtract(req.body.text || ''), source: 'fallback' });
+    }
+});
+
+
+app.post('/api/ai/extract', authenticateToken, async (req, res) => {
+    try {
+        const { text } = req.body;
+        if (!text || text.length < 2) return res.status(400).send('Texte vide.');
+
+        const geminiKey = process.env.GEMINI_API_KEY;
+        if (!geminiKey) {
+            // Fallback simple sans IA : retourner le texte nettoyé
+            const simple = text
+                .replace(/^(pense à|n'oublie pas de|il faut|acheter|prendre|ramener)\s+/i, '')
+                .trim();
+            return res.json({ extracted: simple, source: 'fallback' });
+        }
+
+        const prompt = `Tu es un assistant qui extrait des tâches ou éléments concrets d'un message.
+Règles strictes :
+- Réponds UNIQUEMENT avec le texte de l'élément extrait, rien d'autre
+- Inclure les quantités si présentes (ex: "3 steaks hachés", "500g de farine")
+- Si aucun élément concret : réponds exactement AUCUN
+- Pas d'explication, pas de ponctuation finale, juste l'item en minuscules
+Message : "${text.replace(/"/g, "'")}"`;
+
+        const geminiRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { maxOutputTokens: 60, temperature: 0.1 }
+                })
+            }
+        );
+
+        if (!geminiRes.ok) {
+            const err = await geminiRes.text();
+            console.error('[GEMINI] Erreur API:', err);
+            // Fallback
+            const simple = text.replace(/^(pense à|acheter|prendre|il faut)\s+/i,'').trim();
+            return res.json({ extracted: simple, source: 'fallback' });
+        }
+
+        const geminiData = await geminiRes.json();
+        const extracted = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+        if (!extracted || extracted === 'AUCUN') {
+            return res.json({ extracted: null });
+        }
+
+        console.log(`[GEMINI] Extrait : "${extracted}" depuis "${text.substring(0,40)}..."`);
+        res.json({ extracted, source: 'gemini' });
+
+    } catch(err) {
+        console.error('[AI EXTRACT] Erreur:', err);
+        // Fallback robuste
+        const simple = req.body.text?.replace(/^(pense à|acheter|prendre|il faut)\s+/i,'').trim();
+        res.json({ extracted: simple || null, source: 'fallback' });
+    }
+});
+
+
 app.get('/api/fix-groups', async (req, res) => {
     const email = req.query.email;
     // On donne tous les groupes sans propriétaire à cet email

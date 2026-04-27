@@ -1,6 +1,6 @@
 let socket;
 let allMsgs = [];
-let currentUser = JSON.parse(localStorage.getItem('user'));
+let currentUser = null; // Toujours null au démarrage — rempli après login
 let currentGroupId = localStorage.getItem('currentGroupId') || null;
 let currentGroupConfig = null; // { type, isPro, hasRayons, myRole, name }
 
@@ -419,10 +419,8 @@ function initSkin() {
     applySkin(n);
 }
 
-if (currentUser) {
-    document.getElementById('auth-screen').classList.add('hidden');
-    document.addEventListener('DOMContentLoaded', () => setTimeout(initApp, 200));
-}
+// Toujours forcer le login au démarrage (ne pas restaurer la session)
+// currentUser et token sont ignorés au chargement initial
 
 // ─── GROUPES : liste + sélection ─────────────────────────────────────────────
 // Ordre des groupes persisté
@@ -445,7 +443,7 @@ async function _loadUserPrefs() {
     }
     // Puis charger depuis le serveur
     try {
-        const res = await fetchAuth('/api/user/prefs');
+        const res = await fetchAuth('/api/user/prefs', {}, true);
         if (res && res.ok) {
             _userPrefs = await res.json();
             if (!_userPrefs.tilePrefs)    _userPrefs.tilePrefs    = {};
@@ -1132,26 +1130,28 @@ function _vibrate(pattern) {
 }
 
 function _redirectToLogin(reason) {
-    console.warn('Session expirée :', reason);
+    console.warn('Session expirée ou non authentifié :', reason);
     localStorage.removeItem('token');
-    // Afficher l'écran de login sans reload brutal
+    localStorage.removeItem('user');
+    currentUser = null;
+    // Afficher l'écran de login
     const authScreen = document.getElementById('auth-screen');
     const appContent = document.getElementById('viewport');
     const fixedHdr   = document.querySelector('.fixed-header');
     const tabBar     = document.querySelector('.tab-bar');
     if (authScreen) {
         authScreen.style.display = 'flex';
-        if (typeof renderAuthForm === 'function') renderAuthForm();
+        authScreen.classList.remove('hidden');
     }
     if (appContent) appContent.style.display = 'none';
     if (fixedHdr)   fixedHdr.style.display   = 'none';
     if (tabBar)     tabBar.style.display      = 'none';
 }
 
-async function fetchAuth(url, options = {}) {
+async function fetchAuth(url, options = {}, noRedirect = false) {
     const token = localStorage.getItem('token');
     if (!token) {
-        _redirectToLogin('token manquant');
+        if (!noRedirect) _redirectToLogin('token manquant');
         return new Response(JSON.stringify({message: 'Non authentifié'}), {status: 401});
     }
     const headers = {
@@ -1169,7 +1169,7 @@ async function fetchAuth(url, options = {}) {
     // Token expiré ou invalide → retour au login
     if (res.status === 401 || res.status === 403) {
         const body = await res.text();
-        if (body.includes('xpiré') || body.includes('xpired') || body.includes('nvalide') || body.includes('nvalid') || res.status === 401) {
+        if (!noRedirect && (body.includes('xpiré') || body.includes('xpired') || body.includes('nvalide') || body.includes('nvalid') || res.status === 401)) {
             _redirectToLogin(body);
             return new Response(JSON.stringify({message: 'Session expirée'}), {status: 401});
         }
@@ -1357,22 +1357,8 @@ async function initApp() {
     loadProfile();
     if (typeof initLang === 'function') initLang();
 
-    // Toujours démarrer sur la page Groupes
-    if (typeof goToPage === 'function') goToPage(PAGE_GROUPES);
-
-    // Si un groupe était actif, le charger et aller sur le chat
-    const lastGroupId = localStorage.getItem('lastGroupId');
-    if (lastGroupId) {
-        // Charger le groupe en arrière-plan et naviguer vers le chat
-        setTimeout(async () => {
-            try {
-                await selectGroup(lastGroupId);
-            } catch(e) {
-                // Si le groupe n'existe plus, rester sur Groupes
-                localStorage.removeItem('lastGroupId');
-            }
-        }, 300);
-    }
+    // La navigation vers PAGE_GROUPES est gérée par login()
+    // On charge juste les données nécessaires
     await loadGroups();
     await refreshParamsLists();
     // Restaurer la config UI du dernier groupe visité
@@ -2161,7 +2147,42 @@ let currentPostitId = null;
 // Cache des postits du groupe courant
 let _cachedPostits = [];
 
+// ── Enregistrement vocal ──────────────────────────────────────────────────────
+let _mediaRecorder = null;
+let _audioChunks   = [];
+let _isRecording   = false;
+
 // ── Rendu de la rangée de tuiles ─────────────────────────────────────────────
+// ── État de la barre de message selon pintalk sélectionné ────────────────────
+function _updateMessageBarState(hasPintalk) {
+    const input  = document.getElementById('msg-input');
+    const btnSnd = document.querySelector('#message-bar .btn-send:last-child');
+    const btnMic = document.getElementById('btn-mic');
+    const btnAtt = document.querySelector('#message-bar button:first-child');
+
+    if (hasPintalk) {
+        if (input) {
+            input.disabled    = false;
+            input.style.opacity  = '1';
+            input.style.cursor   = '';
+            input.placeholder = typeof t==='function' ? t('writeMsg') : 'Écrire un message…';
+        }
+        [btnSnd, btnMic, btnAtt].forEach(b => { if(b) { b.disabled=false; b.style.opacity='1'; b.style.cursor='pointer'; } });
+    } else {
+        if (input) {
+            input.disabled    = true;
+            input.value       = '';
+            input.style.opacity  = '0.35';
+            input.style.cursor   = 'not-allowed';
+            input.placeholder = 'Sélectionnez ou créez un pintalk…';
+        }
+        [btnSnd, btnMic, btnAtt].forEach(b => { if(b) { b.disabled=true; b.style.opacity='0.35'; b.style.cursor='not-allowed'; } });
+    }
+    // Afficher/masquer la zone Contenu du pintalk
+    const _ae = document.getElementById('acc-eink');
+    if (_ae) _ae.style.display = hasPintalk ? '' : 'none';
+}
+
 function renderPostitTabs(postits, selectedId) {
     const wrap = document.getElementById('header-pintalk-tabs');
     const hiddenWrap = document.getElementById('pintalk-tabs');
@@ -2247,6 +2268,9 @@ function renderPostitTabs(postits, selectedId) {
     if (wrap) wrap.innerHTML = tabs + addTab;
     if (hiddenWrap) hiddenWrap.innerHTML = '';
 
+    // Activer/désactiver la zone de message selon si un pintalk est sélectionné
+    _updateMessageBarState(!!selectedId);
+
     // border-radius appliqué directement dans le template de chaque tuile
 
     // Mettre à jour sel-pos caché (compatibilité)
@@ -2258,9 +2282,23 @@ function renderPostitTabs(postits, selectedId) {
 }
 
 // ── Sélectionner un postit ────────────────────────────────────────────────────
+// Convertir un nom en teinte HSL stable (pour étiquettes utilisateurs)
+function _nameToHue(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        hash |= 0;
+    }
+    return Math.abs(hash) % 360;
+}
+
+// Activer/désactiver la zone de saisie selon la présence d'un pintalk
+
+
 function selectPostit(postitId) {
     _vibrate(20);
     currentPostitId = postitId;
+    _updateMessageBarState(!!postitId);
     const selPos = document.getElementById('sel-pos');
     if (selPos) selPos.value = postitId;
 
@@ -2921,7 +2959,11 @@ function toggleLineCheck(messageId) {
     if (!pid) return;
 
     // Recalcul du statut automatique
-    const lines = allMsgs.filter(m => m.postitId === pid && !m.isNote);
+    // Chat = messages normaux uniquement (pas les notes IA)
+    const lines = allMsgs.filter(m =>
+        m.postitId === pid &&
+        !(m.isNote && m.senderName === '✨ IA')
+    );
     const checkedCount = lines.filter(m => m.checked).length;
     const totalLines = lines.length;
 
@@ -3092,7 +3134,14 @@ async function refreshView(forceScrollBottom = false) {
         } catch (e) { console.error(e); }
     }
 
-    const forEink = allMsgs.filter(m => m.postitId === pid && !m.isNote && m.type !== 'image');
+    // Zone contenu pintalk = uniquement les notes extraites par l'IA (isNote=true)
+    // Les messages normaux de conversation restent dans le chat uniquement
+    const forEink = allMsgs.filter(m =>
+        m.postitId === pid &&
+        m.isNote === true &&
+        m.senderName === '✨ IA' &&
+        m.type !== 'image'
+    );
     const einkHtml = forEink.map(m => {
         const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");        
         const boxClass = m.checked ? "bg-green-500 border-black text-white" : "bg-white border-black text-transparent";
@@ -3112,6 +3161,19 @@ async function refreshView(forceScrollBottom = false) {
     if (einkSmall) einkSmall.innerHTML = einkHtml;
     if (einkFull) einkFull.innerHTML = einkHtml;
     if (prepHeader) prepHeader.innerHTML = prepHeaderHtml;
+
+    // Mettre à jour et afficher/masquer la zone Contenu du Pintalk
+    const accEink  = document.getElementById('acc-eink');
+    const einkLabel = document.querySelector('label[for="check-eink"].acc-label-text');
+    if (accEink) {
+        if (pid) {
+            accEink.style.display = '';
+            const pintalkName = _cachedPostits.find(p2 => p2._id === pid)?.name || '';
+            if (einkLabel) einkLabel.textContent = `📋 Contenu — ${pintalkName}`;
+        } else {
+            accEink.style.display = 'none';
+        }
+    }
     // Bandeau commande Pro au-dessus des sélecteurs
     const orderBanner = document.getElementById('order-banner');
     const orderBannerContent = document.getElementById('order-banner-content');
@@ -3140,8 +3202,26 @@ async function refreshView(forceScrollBottom = false) {
         chat.innerHTML = [...filtered].reverse().map(m => {
             const isMe = (currentUser && m.senderName === currentUser.name);
             const noteClass = m.isNote ? "opacity-30 italic" : "";
-            const bubbleBg = isMe ? "bg-[#18181b] text-white" : "bg-white text-black";
-            const tagStyle = isMe ? "bg-white text-black" : "bg-black text-white";
+            // Couleur par auteur : hue dérivé du nom
+            let bubbleBgStyle, tagBg, tagColor, bubbleTextColor;
+            if (isMe) {
+                // Moi : bulle noire (ou custom), étiquette fond BLANC texte NOIR
+                bubbleBgStyle   = `var(--bubble-me-bg, #18181b)`;
+                bubbleTextColor = `var(--bubble-me-text, #fff)`;
+                tagBg    = '#ffffff';
+                tagColor = '#18181b';
+            } else {
+                const hue = _nameToHue(m.senderName || '?');
+                // Étiquette : couleur vive (hsl saturé)
+                tagBg    = `hsl(${hue},72%,38%)`;
+                tagColor = '#fff';
+                // Bulle : même teinte mais très claire (pastel)
+                bubbleBgStyle   = `hsl(${hue},55%,94%)`;
+                bubbleTextColor = `hsl(${hue},60%,20%)`;
+            }
+            const tagStyle = `background:${tagBg};color:${tagColor};`;
+            const bubbleBg = isMe ? '' : '';  // géré via style inline
+            const bubbleBgInline = `background:${bubbleBgStyle};color:${bubbleTextColor};`;
 
             let contentHtml = `<span id="text-${m._id}" style="font-size:13px; font-weight:700; line-height:1.4; word-break:break-word; overflow-wrap:break-word; white-space:pre-wrap; flex:1;">${m.content}</span>`;
             if (m.type === 'image') {
@@ -3152,16 +3232,25 @@ async function refreshView(forceScrollBottom = false) {
                          onclick="openFullImage('${m.content}')"
                          alt="Document">
                 </div>`;
+            } else if (m.type === 'audio') {
+                contentHtml = `
+                <div class="flex-1 py-1" style="min-width:160px;">
+                    <audio controls src="${m.content}"
+                           style="width:100%;height:32px;outline:none;"
+                           preload="none">
+                    </audio>
+                </div>`;
             }
 
             return `
             <div class="msg-row ${isMe ? 'me' : 'others'} ${noteClass} mb-2">
 
                 <div id="swipe-${m._id}"
-                     class="msg-bubble"
+                     class="msg-bubble ${isMe ? 'me' : 'others'}"
                      style="position:relative; max-width:75%;
                             word-break:break-word; overflow-wrap:break-word;
-                            transform:translateX(0); transition:transform 0.2s ease;"
+                            transform:translateX(0); transition:transform 0.2s ease;
+                            ${bubbleBgInline}"
                      ${isMe ? `ontouchstart="handleTouchStart(event,'${m._id}')"
                      ontouchmove="handleTouchMove(event,'${m._id}')"
                      ontouchend="handleTouchEnd(event,'${m._id}')"` : ''}>
@@ -3185,13 +3274,14 @@ async function refreshView(forceScrollBottom = false) {
                                    transition:opacity 0.2s;">🖍️</button>` : ''}
 
                     <div style="display:flex; align-items:flex-start; gap:6px;">
-                        <span class="msg-author-tag" style="flex-shrink:0;">${isMe ? 'Moi' : m.senderName}</span>
+                        <span class="msg-author-tag" style="flex-shrink:0;${tagStyle}">${isMe ? (typeof t==='function'?t('me'):'Moi') : m.senderName}</span>
                         ${contentHtml}
                         <button ontouchend="event.stopPropagation(); toggleNote('${m._id}')"
                                 onclick="event.stopPropagation(); toggleNote('${m._id}')"
                                 style="flex-shrink:0; font-size:16px; background:none; border:none; cursor:pointer;
                                        padding:4px 6px; margin:-4px -2px; touch-action:manipulation;">
                             ${m.isNote ? '🚫' : '👁️'}</button>
+
                     </div>
                 </div>
             </div>`;
@@ -3574,14 +3664,222 @@ function handleSelectStatus(selectElement, pid) {
     });
 }
 
+// ── Messages vocaux ──────────────────────────────────────────────────────────
+let _speechRecognition = null;
+
+// ── Enregistrement vocal ──────────────────────────────────────────────────────
+// Comportement :
+//   1er appui → active la reconnaissance vocale, écrit dans msg-input en temps réel
+//   Bouton Envoyer → envoie le texte ET arrête la reconnaissance
+//   2e appui sur micro → annule sans envoyer
+
+function _stopSpeechRecognition() {
+    if (_speechRecognition) {
+        try { _speechRecognition.stop(); } catch(e) {}
+        _speechRecognition = null;
+    }
+    _isRecording = false;
+    const btn = document.getElementById('btn-mic');
+    const dot = document.getElementById('mic-dot');
+    if (btn) { btn.classList.remove('recording'); btn.title = 'Dicter un message'; }
+    if (dot) dot.style.display = 'none';
+}
+
+function toggleRecording() {
+    if (_isRecording) {
+        // 2e appui → annuler sans envoyer
+        _stopSpeechRecognition();
+        _vibrate([20, 50, 20]);
+        return;
+    }
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+        alert('Dictée vocale non supportée. Utilisez Chrome ou Safari.');
+        return;
+    }
+
+    const input = document.getElementById('msg-input');
+    const btn   = document.getElementById('btn-mic');
+    const dot   = document.getElementById('mic-dot');
+
+    _speechRecognition = new SpeechRec();
+    _speechRecognition.continuous     = true;
+    _speechRecognition.interimResults = true;  // résultats partiels en temps réel
+    const langMap = { fr:'fr-FR', en:'en-US', es:'es-ES', de:'de-DE', it:'it-IT' };
+    _speechRecognition.lang = langMap[localStorage.getItem('lang') || 'fr'] || 'fr-FR';
+
+    let _finalTranscript = '';
+
+    _speechRecognition.onresult = e => {
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) {
+                _finalTranscript += e.results[i][0].transcript + ' ';
+            } else {
+                interim += e.results[i][0].transcript;
+            }
+        }
+        // Afficher dans la zone de message : texte final + texte en cours (italique via placeholder)
+        if (input) input.value = _finalTranscript + interim;
+    };
+
+    _speechRecognition.onerror = e => {
+        console.warn('Speech error:', e.error);
+        if (e.error === 'not-allowed') {
+            alert('Accès micro refusé. Autorisez-le dans les réglages du navigateur.');
+        }
+        _stopSpeechRecognition();
+    };
+
+    _speechRecognition.onend = () => {
+        // Si toujours en mode enregistrement (pas arrêté manuellement) → redémarrer
+        if (_isRecording) {
+            try { _speechRecognition?.start(); } catch(e) {}
+        }
+    };
+
+    try {
+        _speechRecognition.start();
+        _isRecording = true;
+        if (btn) { btn.classList.add('recording'); btn.title = 'Dictée active — Appuyez sur Envoyer ou ici pour annuler'; }
+        if (dot) dot.style.display = 'block';
+        if (input) { input.focus(); input.placeholder = '🎙️ Parlez…'; }
+        _vibrate(20);
+    } catch(e) {
+        alert('Impossible de démarrer la dictée : ' + e.message);
+        _stopSpeechRecognition();
+    }
+}
+
+async function _uploadAudio() {
+    if (!_audioChunks.length) return;
+    const blob = new Blob(_audioChunks, { type: 'audio/webm' });
+
+    // Proposer : envoyer en audio OU transcrire via Web Speech API
+    const useTranscribe = _speechTranscript && _speechTranscript.trim().length > 2;
+
+    if (useTranscribe) {
+        const transcribed = _speechTranscript.trim();
+        _speechTranscript = '';
+        _audioChunks = [];
+        // Envoyer le texte transcrit comme message normal
+        _sendTextMessage(transcribed);
+        // Extraction IA automatique comme pour les messages écrits
+        const pid = currentPostitId || document.getElementById('sel-pos')?.value;
+        if (pid) setTimeout(() => aiAutoExtract(transcribed, pid), 300);
+        return;
+    }
+
+    // Sinon : upload audio sur Cloudinary
+    const formData = new FormData();
+    formData.append('file', blob, `voice_${Date.now()}.webm`);
+
+    try {
+        const token = localStorage.getItem('token');
+        const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const audioUrl = data.url;
+
+        const gid = currentGroupId;
+        const did = document.getElementById('sel-dev')?.value || '';
+        const pid = currentPostitId || document.getElementById('sel-pos')?.value;
+        if (gid && pid) {
+            socket.emit('send-message', {
+                groupId: gid, deviceId: did, postitId: pid,
+                content: audioUrl,
+                senderName: currentUser?.name || '',
+                type: 'audio'
+            });
+        }
+    } catch(e) {
+        console.error('Upload audio:', e);
+        alert('Erreur upload audio : ' + e.message);
+    }
+    _audioChunks = [];
+}
+
+function _sendTextMessage(text) {
+    const gid = currentGroupId;
+    const did = document.getElementById('sel-dev')?.value || '';
+    const pid = currentPostitId || document.getElementById('sel-pos')?.value;
+    if (gid && pid && text) {
+        socket.emit('send-message', {
+            groupId: gid, deviceId: did, postitId: pid,
+            content: text,
+            senderName: currentUser?.name || '',
+            type: 'text'
+        });
+    }
+}
+
+// ── IA : extraire un item d'une bulle et l'ajouter au pintalk ───────────────
+// Analyse IA automatique après envoi de message
+// Extrait PLUSIEURS items et les ajoute ligne par ligne dans le pintalk
+async function aiAutoExtract(text, postitId) {
+    if (!text || text.length < 3 || !postitId) return;
+    // Ne pas analyser les messages très courts (moins de 5 mots)
+    if (text.split(' ').length < 3) return;
+
+    try {
+        const aiRes = await fetchAuth('/api/ai/extract-multi', {
+            method: 'POST',
+            body: JSON.stringify({ text })
+        });
+        if (!aiRes.ok) return; // Silencieux en cas d'erreur
+
+        const aiData = await aiRes.json();
+        const items = aiData.items; // tableau de strings
+        if (!items || !items.length) return;
+
+        const gid = currentGroupId;
+        const did = document.getElementById('sel-dev')?.value || '';
+        if (!gid) return;
+
+        // Ajouter chaque item comme note séparée dans le pintalk
+        for (const item of items) {
+            if (!item || item.trim().length < 2) continue;
+            socket.emit('send-message', {
+                groupId: gid,
+                deviceId: did,
+                postitId: postitId,
+                content: item.trim(),
+                senderName: '✨ IA',
+                isNote: true,
+                type: 'text'
+            });
+            // Petit délai entre chaque item pour éviter les collisions
+            await new Promise(r => setTimeout(r, 80));
+        }
+    } catch(e) {
+        console.warn('aiAutoExtract:', e.message);
+        // Silencieux — ne pas déranger l'utilisateur
+    }
+}
+
 function send() {
     const input = document.getElementById('msg-input'),
           gid = currentGroupId || document.getElementById('sel-group')?.value,
           did = document.getElementById('sel-dev')?.value || '',
-          pid = document.getElementById('sel-pos').value;
-    if (!input.value || !gid || !pid) return;
-    socket.emit('send-message', { groupId: gid, deviceId: did, postitId: pid, content: input.value, senderName: currentUser.name });
+          pid = currentPostitId || document.getElementById('sel-pos')?.value;
+    if (!input?.value?.trim() || !gid || !pid) return;
+    const text = input.value.trim();
+
+    // Arrêter la dictée vocale si active
+    if (_isRecording) {
+        _stopSpeechRecognition();
+        if (input) input.placeholder = 'Écrire un message…';
+    }
+
+    socket.emit('send-message', { groupId: gid, deviceId: did, postitId: pid, content: text, senderName: currentUser?.name || '' });
     input.value = '';
+    // Analyse IA automatique en arrière-plan (silencieuse)
+    setTimeout(() => aiAutoExtract(text, pid), 300);
 }
 
 
@@ -3894,8 +4192,12 @@ async function uiJoinGroup() {
 }
 
 async function login() {
-    const email = document.getElementById('loginEmail').value;
-    const password = document.getElementById('loginPassword').value;
+    // Déléguer à handleAuth() de auth.js si disponible
+    if (typeof handleAuth === 'function') { await handleAuth(); return; }
+    // Fallback direct
+    const email    = document.getElementById('auth-email')?.value?.trim();
+    const password = document.getElementById('auth-pass')?.value;
+    if (!email || !password) { alert('Email et mot de passe requis.'); return; }
 
     // ⚠️ Utilise bien "fetch" ici, pas "fetchAuth"
     const res = await fetch('/api/login', {
@@ -3908,12 +4210,26 @@ async function login() {
 
     if (res.ok) {
         currentUser = data.user;
-        // On sauvegarde le token qu'on vient de recevoir
         localStorage.setItem('user', JSON.stringify(data.user));
-        localStorage.setItem('token', data.token); 
-        
-        document.getElementById('auth-screen').classList.add('hidden');
-        initApp();
+        localStorage.setItem('token', data.token);
+
+        const authScreen = document.getElementById('auth-screen');
+        if (authScreen) {
+            authScreen.classList.add('hidden');
+            authScreen.style.display = 'none';  // forcer via style inline aussi
+        }
+
+        // Réafficher le viewport et la navigation (peut avoir été caché par _redirectToLogin)
+        const vp   = document.getElementById('viewport');
+        const hdr  = document.querySelector('.fixed-header');
+        const tabs = document.querySelector('.tab-bar');
+        if (vp)   { vp.style.display   = 'block'; }
+        if (hdr)  { hdr.style.display  = 'flex';  }
+        if (tabs) { tabs.style.display = 'flex';   }
+
+        // Démarrer l'app et aller sur la page des groupes
+        await initApp();
+        if (typeof goToPage === 'function') goToPage(PAGE_GROUPES);
     } else {
         alert("Erreur : " + (data.message || "Connexion échouée"));
     }

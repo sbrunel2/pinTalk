@@ -16,7 +16,7 @@
     <input type="text"     id="auth-name"  placeholder="Nom complet" class="hidden">
     <input type="email"    id="auth-email" placeholder="Email" data-i18n="emailLabel">
     <input type="password" id="auth-pass"  placeholder="Mot de passe">
-    <button onclick="handleAuth()" id="auth-btn" class="btn-black h-14 mt-4 text-lg">Connexion</button>
+    <button onclick="login()" id="auth-btn" class="btn-black h-14 mt-4 text-lg">Connexion</button>
     <p class="text-center mt-6 text-[10px] uppercase font-black cursor-pointer opacity-50"
        onclick="toggleAuthMode()" id="auth-toggle">Pas de compte ? Créer un compte</p>
 </div>
@@ -383,6 +383,23 @@
         <span style="font-size:18px; line-height:1;">📎</span>
     </button>
     <textarea id="msg-input" placeholder="Écrire un message…" data-i18n="writeMsg" style="flex:1; margin:0 5px;"></textarea>
+    <button id="btn-mic" onclick="toggleRecording()" class="btn-send"
+            style="display:flex;align-items:center;justify-content:center;flex-shrink:0;width:44px;height:44px;position:relative;"
+            title="Dicter un message">
+        <svg id="mic-icon" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
+             fill="currentColor" style="transition:color 0.2s;">
+            <!-- Micro -->
+            <rect x="9" y="2" width="6" height="11" rx="3"/>
+            <!-- Bras du micro -->
+            <path d="M5 10a7 7 0 0 0 14 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <!-- Pied -->
+            <line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="9" y1="22" x2="15" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <!-- Point rouge clignotant quand actif -->
+        <span id="mic-dot" style="display:none;position:absolute;top:6px;right:6px;width:8px;height:8px;
+              background:#ef4444;border-radius:50%;animation:micPulse 1s infinite;"></span>
+    </button>
     <button onclick="send()" class="btn-send"
             style="display:flex; align-items:center; justify-content:center; flex-shrink:0;">
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
