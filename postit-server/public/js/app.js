@@ -1109,7 +1109,16 @@ function editMessage(id) {
                 method: 'PATCH',
                 body: JSON.stringify({ content: newText })
             });
-            if (res.ok) { msg.content = newText; }
+            if (res.ok) {
+                msg.content = newText;
+                // Ré-analyser avec l'IA : supprimer les anciennes notes IA liées
+                // puis recréer depuis le nouveau texte
+                const pid = msg.postitId;
+                if (pid && !msg.isNote) {
+                    await _deleteAiNotesForMessage(id, pid);
+                    setTimeout(() => aiAutoExtract(newText, pid), 200);
+                }
+            }
             else { textSpan.innerText = originalText; }
         } catch (err) { console.error(err); textSpan.innerText = originalText; }
     };
@@ -3143,18 +3152,28 @@ async function refreshView(forceScrollBottom = false) {
         m.type !== 'image'
     );
     const einkHtml = forEink.map(m => {
-        const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");        
-        const boxClass = m.checked ? "bg-green-500 border-black text-white" : "bg-white border-black text-transparent";
-        const textStyle = m.checked ? "color: #a1a1aa; text-decoration: line-through;" : "color: #000;";
+        const isLocked   = (currentStatus === "Annulé" || currentStatus === "En caisse");
+        const uncertain  = !!m.isUncertain;
         const opacityClass = isLocked ? "opacity-50 cursor-not-allowed" : "cursor-pointer";
-        
+
+        // Items certains ET incertains ont une case à cocher
+        // Incertain = couleur orange + préfixe ?
+        const borderCol = uncertain ? '#d97706' : '#000';
+        const boxClass  = m.checked ? "bg-green-500 text-white" : "bg-white text-transparent";
+        const textColor = m.checked ? '#a1a1aa' : (uncertain ? '#d97706' : '#000');
+        const textDeco  = m.checked ? 'line-through' : 'none';
+        const prefix    = uncertain && !m.checked ? '? ' : '';
         return `
-        <div class="flex items-center gap-3 mb-2 group ${opacityClass}" 
-             onclick="event.stopPropagation(); ${isLocked ? "console.log('Liste verrouillée')" : `toggleLineCheck('${m._id}')`}">
-            <div class="w-5 h-5 border-2 flex-shrink-0 flex items-center justify-center transition-colors ${boxClass}">
+        <div class="flex items-center gap-3 mb-2 group ${opacityClass}"
+             onclick="event.stopPropagation(); ${isLocked ? '' : `toggleLineCheck('${m._id}')`}">
+            <div class="w-5 h-5 flex-shrink-0 flex items-center justify-center transition-colors ${boxClass}"
+                 style="border:2px solid ${borderCol};">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
-            <span class="text-[13px] font-bold" style="${textStyle}; word-break:break-word; overflow-wrap:break-word; white-space:normal; min-width:0;">${m.content}</span>
+            <span class="text-[13px] font-bold"
+                  style="color:${textColor};text-decoration:${textDeco};word-break:break-word;overflow-wrap:break-word;white-space:normal;min-width:0;">
+                ${prefix}${m.content}
+            </span>
         </div>`;
     }).join('');
 
@@ -3408,8 +3427,12 @@ async function refreshView(forceScrollBottom = false) {
 	const einkHtml = forEink.map(m => {
 		// On ne verrouille PAS si c'est "Terminé", seulement si c'est payé ou annulé
 		const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");		
-		const boxClass = m.checked ? "bg-green-500 border-black text-white" : "bg-white border-black text-transparent";
-		const textStyle = m.checked ? "color: #a1a1aa; text-decoration: line-through;" : "color: #000;";
+		const uncertain    = !!m.isUncertain;
+		const borderCol    = uncertain ? '#d97706' : '#000';
+		const boxClass     = m.checked ? "bg-green-500 text-white" : "bg-white text-transparent";
+		const textColor    = m.checked ? '#a1a1aa' : (uncertain ? '#d97706' : '#000');
+		const textDeco     = m.checked ? 'line-through' : 'none';
+		const qPrefix      = uncertain && !m.checked ? '? ' : '';
 		
 		// Si verrouillé, on met une opacité basse et on désactive le curseur
 		const opacityClass = isLocked ? "opacity-50 cursor-not-allowed" : "cursor-pointer";
@@ -3720,8 +3743,16 @@ function toggleRecording() {
                 interim += e.results[i][0].transcript;
             }
         }
-        // Afficher dans la zone de message : texte final + texte en cours (italique via placeholder)
-        if (input) input.value = _finalTranscript + interim;
+        // Afficher dans la zone de message en temps réel
+        if (input) {
+            input.value = _finalTranscript + interim;
+            autoResizeInput(input);
+        }
+        // Réarmer le timer de pause (2.5s de silence → virgule)
+        if (_pauseTimer) clearTimeout(_pauseTimer);
+        if (_isRecording && _finalTranscript.trim()) {
+            _pauseTimer = setTimeout(_insertPauseSep, 2500);
+        }
     };
 
     _speechRecognition.onerror = e => {
@@ -3732,11 +3763,22 @@ function toggleRecording() {
         _stopSpeechRecognition();
     };
 
-    _speechRecognition.onend = () => {
-        // Si toujours en mode enregistrement (pas arrêté manuellement) → redémarrer
-        if (_isRecording) {
-            try { _speechRecognition?.start(); } catch(e) {}
+    // Détection de pause : timer qui insère une virgule si silence > 2s
+    let _pauseTimer = null;
+    const _insertPauseSep = () => {
+        if (!_isRecording || !input) return;
+        const cur = input.value.trimEnd();
+        if (cur.length > 0 && !cur.endsWith(',') && !cur.endsWith('.') && !cur.endsWith(';')) {
+            input.value = cur + ', ';
+            autoResizeInput(input);
         }
+    };
+
+    _speechRecognition.onend = () => {
+        if (!_isRecording) return;
+        // Insérer séparateur puis redémarrer
+        _insertPauseSep();
+        try { _speechRecognition?.start(); } catch(e) {}
     };
 
     try {
@@ -3821,45 +3863,91 @@ function _sendTextMessage(text) {
 // ── IA : extraire un item d'une bulle et l'ajouter au pintalk ───────────────
 // Analyse IA automatique après envoi de message
 // Extrait PLUSIEURS items et les ajoute ligne par ligne dans le pintalk
+// Supprimer les notes IA liées à un message source (avant ré-analyse)
+async function _deleteAiNotesForMessage(sourceMessageId, postitId) {
+    // Les notes IA n'ont pas de lien direct avec le message source dans le modèle actuel
+    // Stratégie : supprimer TOUTES les notes IA du pintalk créées dans les 30s après ce message
+    const sourceMsg = allMsgs.find(m => m._id === sourceMessageId);
+    if (!sourceMsg) return;
+    const sourceTime = new Date(sourceMsg.date).getTime();
+    const windowMs   = 35000; // 35 secondes de fenêtre
+    const aiNotes = allMsgs.filter(m =>
+        m.postitId === postitId &&
+        m.isNote &&
+        m.senderName === '✨ IA' &&
+        Math.abs(new Date(m.date).getTime() - sourceTime) < windowMs
+    );
+    for (const note of aiNotes) {
+        try {
+            await fetchAuth('/api/messages/' + note._id, { method: 'DELETE' });
+            allMsgs = allMsgs.filter(m => m._id !== note._id);
+        } catch(e) {}
+    }
+}
+
 async function aiAutoExtract(text, postitId) {
-    if (!text || text.length < 3 || !postitId) return;
-    // Ne pas analyser les messages très courts (moins de 5 mots)
-    if (text.split(' ').length < 3) return;
+    // Seuil minimal : 2 caractères et un pintalk cible
+    if (!text || text.trim().length < 2 || !postitId) return;
+    // SUPPRIMÉ : le filtre "moins de 3 mots" bloquait "biscottes", "pain", etc.
+
+    console.log('[AI] Analyse du texte:', text.substring(0, 80));
 
     try {
-        const aiRes = await fetchAuth('/api/ai/extract-multi', {
+        const token = localStorage.getItem('token');
+        // Utiliser fetch directement avec les bons headers
+        const aiRes = await fetch('/api/ai/extract-multi', {
             method: 'POST',
-            body: JSON.stringify({ text })
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ text: text.trim() })
         });
-        if (!aiRes.ok) return; // Silencieux en cas d'erreur
+
+        console.log('[AI] Réponse status:', aiRes.status);
+        if (!aiRes.ok) {
+            console.warn('[AI] Erreur HTTP:', aiRes.status);
+            return;
+        }
 
         const aiData = await aiRes.json();
-        const items = aiData.items; // tableau de strings
-        if (!items || !items.length) return;
+        console.log('[AI] Items reçus:', JSON.stringify(aiData.items));
+
+        const items = aiData.items;
+        if (!items || !items.length) {
+            console.warn('[AI] Aucun item retourné');
+            return;
+        }
 
         const gid = currentGroupId;
         const did = document.getElementById('sel-dev')?.value || '';
-        if (!gid) return;
+        if (!gid) { console.warn('[AI] Pas de groupe courant'); return; }
 
-        // Ajouter chaque item comme note séparée dans le pintalk
         for (const item of items) {
-            if (!item || item.trim().length < 2) continue;
+            const itemText = typeof item === 'object' ? item.text : item;
+            const uncertain = typeof item === 'object' ? !!item.uncertain : false;
+            if (!itemText || itemText.trim().length < 1) continue;
+            console.log('[AI] Envoi item:', itemText, 'uncertain:', uncertain);
             socket.emit('send-message', {
                 groupId: gid,
                 deviceId: did,
                 postitId: postitId,
-                content: item.trim(),
+                content: itemText.trim(),
                 senderName: '✨ IA',
                 isNote: true,
+                isUncertain: uncertain,
                 type: 'text'
             });
-            // Petit délai entre chaque item pour éviter les collisions
             await new Promise(r => setTimeout(r, 80));
         }
     } catch(e) {
-        console.warn('aiAutoExtract:', e.message);
-        // Silencieux — ne pas déranger l'utilisateur
+        console.error('[AI] Exception:', e.message);
     }
+}
+
+function autoResizeInput(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
 
 function send() {
@@ -3877,7 +3965,13 @@ function send() {
     }
 
     socket.emit('send-message', { groupId: gid, deviceId: did, postitId: pid, content: text, senderName: currentUser?.name || '' });
+    // Vider complètement la zone de saisie
     input.value = '';
+    input.style.height = '38px';
+    input.style.minHeight = '38px';
+    input.placeholder = 'Écrire un message…';
+    input.blur();
+    setTimeout(() => input.focus(), 50);
     // Analyse IA automatique en arrière-plan (silencieuse)
     setTimeout(() => aiAutoExtract(text, pid), 300);
 }

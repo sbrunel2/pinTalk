@@ -11,20 +11,25 @@ const server = http.createServer(app);
 const io = new Server(server);
 const rateLimit    = require('express-rate-limit');
 
+// Faire confiance au reverse proxy Oracle Cloud (nécessaire pour rate-limit et logs IP)
+app.set('trust proxy', 1);
+
 
 // ── Rate limiting — anti brute-force ──────────────────────────────────────────
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,  // 15 minutes
-    max: 20,                     // 20 tentatives max
+    windowMs: 15 * 60 * 1000,
+    max: 20,
     message: { message: 'Trop de tentatives. Réessayez dans 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { xForwardedForHeader: false },  // désactive le warning derrière un proxy
 });
 const apiLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000,   // 1 minute
-    max: 120,                    // 120 req/min
+    windowMs: 1 * 60 * 1000,
+    max: 120,
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { xForwardedForHeader: false },  // désactive le warning derrière un proxy
 });
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
@@ -161,8 +166,9 @@ const Message = mongoose.model('Message', {
     postitId: String, 
     content: String, 
     senderName: String, 
-    isNote: { type: Boolean, default: false },
-    checked: { type: Boolean, default: false }, 
+    isNote:      { type: Boolean, default: false },
+    isUncertain: { type: Boolean, default: false },
+    checked:     { type: Boolean, default: false }, 
     date: { type: Date, default: Date.now }, 
 	type: { type: String, default: 'text' }
 });
@@ -686,10 +692,102 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
 
 // ── IA : extraction d'éléments via Gemini ─────────────────────────────────────
 // ── Helpers IA ─────────────────────────────────────────────────────────────────
+
+// ── Helpers d'extraction ─────────────────────────────────────────────────────
+
+function _stripArticle(text) {
+    return text
+        .replace(/^(du|de\s+la|de\s+l['\u2019]|des|une?|le|la|les|d['\u2019])\s*/i, '')
+        .trim();
+}
+
+function _isQuestion(text) {
+    return /\?|faudrait|devrait|pourrait|serait|faut-il|ne\s+faut|on\s+devrait|est.ce\s+qu|peut.tre|peut tre/i.test(text);
+}
+
+// Séparer un texte en items par articles + quantités
+// "100g de steak haché 300g de rôti de veau six paupiettes Un paquet de lardons" → 4 items
+function _splitByArticles(text) {
+    text = text.replace(/\bEt\b/g, 'et').replace(/\bET\b/g, 'et');
+    const nombresEcrits = /^(deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|quinze|vingt)$/i;
+    const unitesSolo    = /^(g|kg|ml|l|cl|dl|gr)$/i;
+    const contenants    = /^(paquet|paquets|brique|briques|bouteille|bouteilles|bo[iî]te|bo[iî]tes|filet|filets|tranche|tranches|part|parts|pot|pots|barquette|barquettes|sachet|sachets|carton|cartons|pack|packs|c[oô]te|cotes|escalope|escalopes|r[oô]ti|rotis|morceau|morceaux|litre|litres|botte|bottes|flacon|flacons)$/i;
+    const nomsComposes  = /^(veau|boeuf|b[oœ]uf|porc|poulet|agneau|saumon|thon|cabillaud|lieu|sole|dinde|canard|lapin|ail|b[oœ]uf)$/i;
+    const articlesSimples = /^(de|du|des|le|la|les|un|une|et)$/i;
+
+    // Pré-tokeniser les articles composés "de la/le/les/l'" → tokens Ⓐ
+    let t = text
+        .replace(/\bde\s+l['\u2019]/gi, '\u24B6DEL')
+        .replace(/\bde\s+la\b/gi,       '\u24B6DELA')
+        .replace(/\bde\s+les?\b/gi,     '\u24B6DLES');
+
+    const words = t.trim().split(/\s+/);
+    const boundaries = new Set();
+
+    for (let i = 1; i < words.length; i++) {
+        const w    = words[i];
+        const prev = words[i-1].toLowerCase();
+        const next = (words[i+1] || '').toLowerCase();
+        const prevIsUnit      = unitesSolo.test(prev);
+        const prevIsContenant = contenants.test(prev);
+        const prevIsArtToken  = /^\u24B6/.test(words[i-1]);
+        const nextIsNum       = /^\d/.test(next) || unitesSolo.test(next);
+        // Mot précédent est un vrai mot produit (pas article, pas unité, pas contenant)
+        const prevIsRealWord  = prev.length > 1
+                                && !prevIsUnit && !prevIsContenant
+                                && !articlesSimples.test(prev)
+                                && !/^\u24B6/.test(prev);
+
+        const isNewItem =
+            // Chiffre (sauf après article)
+            (/^\d/.test(w) && !['de','du','des','la','le','les','et','un','une'].includes(prev)) ||
+            // Nombre écrit
+            (nombresEcrits.test(w) && !['de','du','des','et'].includes(prev)) ||
+            // un/une après un vrai mot produit
+            (/^(un|une)$/i.test(w) && prevIsRealWord) ||
+            // Un/Une majuscule en milieu
+            /^(Un|Une)$/.test(w) ||
+            // Articles simples (sauf après contenant)
+            (/^(du|des|le|la|les)$/i.test(w) && !prevIsContenant) ||
+            // Token article composé (sauf après contenant)
+            (/^\u24B6/.test(w) && !prevIsContenant) ||
+            // "de" simple (sauf après unité/contenant/avant nom composé ou chiffre)
+            (/^de$/i.test(w) && !prevIsUnit && !prevIsContenant
+             && !nomsComposes.test(next) && !nextIsNum) ||
+            // "et" → séparateur
+            /^et$/i.test(w);
+
+        if (isNewItem) boundaries.add(i);
+    }
+
+    // Construire les items selon les frontières
+    const items = [];
+    let start = 0;
+    const bArr = [...boundaries].sort((a, b) => a - b);
+    for (const b of bArr) {
+        const seg = words.slice(start, b)
+            .filter(w => !/^et$/i.test(w))
+            .join(' ').trim();
+        if (seg.length > 1) items.push(seg);
+        start = b;
+    }
+    const last = words.slice(start).filter(w => !/^et$/i.test(w)).join(' ').trim();
+    if (last.length > 1) items.push(last);
+
+    // Restaurer les tokens articles composés
+    const restore = s => s
+        .replace(/\u24B6DELA/g, 'de la')
+        .replace(/\u24B6DEL/g,  "de l'")
+        .replace(/\u24B6DLES/g, 'des')
+        .replace(/\s+/g, ' ').trim();
+
+    return items.map(restore).filter(s => s.length > 1) || null;
+}
+
 function _fallbackExtract(text) {
     return text
-        .split(/,|;| et | puis | aussi | avec /i)
-        .map(s => s.replace(/^(pense\s+à|il\s+faut|acheter|prendre|ramener|ajouter)\s+/i, '').trim())
+        .split(/,|;|\s+et\s+|\s+puis\s+|\s+aussi\s+/i)
+        .map(s => s.replace(/^(pense\s+[aà]|il\s+faut|acheter|prendre|ramener|ajouter)\s+/i, '').trim())
         .filter(s => s.length > 1);
 }
 
@@ -697,22 +795,91 @@ function _fallbackExtract(text) {
 app.post('/api/ai/extract-multi', authenticateToken, async (req, res) => {
     try {
         const { text } = req.body;
+        console.log('[EXTRACT-MULTI] Reçu:', JSON.stringify(text).substring(0, 100));
         if (!text || text.length < 2) return res.status(400).send('Texte vide.');
 
         const geminiKey = process.env.GEMINI_API_KEY;
+        const isQuestion = _isQuestion(text);
+
+        // ── Pré-traitement : séparer par articles avant Gemini ─────────────
+        // "du pain du beurre" → ["pain", "beurre"]
+        const preSplit = _splitByArticles(text);
         if (!geminiKey) {
-            return res.json({ items: _fallbackExtract(text), source: 'fallback' });
+            // Sans Gemini : utiliser le pré-traitement + fallback
+            const parts = preSplit || _fallbackExtract(text);
+            const items = parts.map(t => ({ text: _stripArticle(t), uncertain: isQuestion }));
+            console.log('[FALLBACK] Items:', JSON.stringify(items));
+            return res.json({ items, source: 'fallback' });
+        }
+
+        // Si pré-traitement a trouvé plusieurs items ET pas de Gemini nécessaire
+        // (liste simple sans question) → bypass Gemini pour vitesse
+        if (preSplit && preSplit.length > 1 && !isQuestion &&
+            !text.match(/faudrait|devrait|acheter|prendre|pense|oublie|peut.être/i)) {
+            const items = preSplit.map(t => ({ text: t.trim(), uncertain: false }));
+            console.log('[PRE-SPLIT] Bypass Gemini, items:', JSON.stringify(items));
+            return res.json({ items, source: 'presplit' });
         }
 
         const safeText = text.replace(/"/g, "'").substring(0, 300);
-        const prompt = `Tu es un assistant qui extrait des produits ou éléments concrets d'un message.
-Regles STRICTES :
-- Reponds UNIQUEMENT avec un tableau JSON valide, sans markdown ni backticks
-- Chaque element est un string avec quantite si presente
-- Exemples corrects : ["pain","3 croissants"] ou ["300g viande hachee","2 steaks"]
-- Si aucun produit identifiable : reponds []
-- Minuscules, inclure les quantites
-Message : "${safeText}"`;
+
+        // ── Prompt avec rôle + few-shot + JSON forcé (conseils NLU) ─────────────
+        // Rôle : extracteur logistique, pas assistant conversationnel
+        // Few-shot : exemples calibrés pour questions modales et listes
+        // Format : JSON strict {items:[{text,uncertain}]}
+        // Température : 0.1 (exécution brute, pas de zèle conversationnel)
+        const systemPrompt = `Tu es un extracteur logistique de liste de courses et de taches. Tu identifies les produits mentionnes dans tout message : affirmation, question ou suggestion. IMPORTANT : le texte peut provenir d'une transcription vocale automatique et contenir des erreurs phonetiques ou orthographiques (ex: "biscote" pour "biscottes", "yaour" pour "yaourt", "shampoin" pour "shampoing"). Corrige ces erreurs et extrais le produit correct. Tu reponds UNIQUEMENT avec du JSON valide, jamais avec du texte libre.`;
+
+        const fewShotPrompt = `EXEMPLES DE TRANSFORMATION (few-shot) :
+
+Message: "biscottes"
+Reponse: {"items":[{"text":"biscottes","uncertain":false}]}
+
+Message: "du pain du beurre"
+Reponse: {"items":[{"text":"pain","uncertain":false},{"text":"beurre","uncertain":false}]}
+
+Message: "du lait du fromage des oeufs"
+Reponse: {"items":[{"text":"lait","uncertain":false},{"text":"fromage","uncertain":false},{"text":"oeufs","uncertain":false}]}
+
+Message: "prends du pain et 3 croissants"
+Reponse: {"items":[{"text":"pain","uncertain":false},{"text":"3 croissants","uncertain":false}]}
+
+Message: "du pain du beurre et des oeufs"
+Reponse: {"items":[{"text":"pain","uncertain":false},{"text":"beurre","uncertain":false},{"text":"oeufs","uncertain":false}]}
+
+Message: "Il nous faudrait des pommes non ?"
+Reponse: {"items":[{"text":"pommes","uncertain":true}]}
+
+Message: "N'oublie pas le lait, et peut-etre du fromage"
+Reponse: {"items":[{"text":"lait","uncertain":false},{"text":"fromage","uncertain":true}]}
+
+Message: "Ne faudrait-il pas prendre du pain et du beurre ?"
+Reponse: {"items":[{"text":"pain","uncertain":true},{"text":"beurre","uncertain":true}]}
+
+Message: "est ce qu il ne faudrait pas acheter du pain ?"
+Reponse: {"items":[{"text":"pain","uncertain":true}]}
+
+Message: "300g viande hachee, 2 steaks, un roti de veau"
+Reponse: {"items":[{"text":"300g viande hachee","uncertain":false},{"text":"2 steaks","uncertain":false},{"text":"roti de veau","uncertain":false}]}
+
+Message: "on devrait penser a prendre du detergent"
+Reponse: {"items":[{"text":"detergent","uncertain":true}]}
+
+Message: "du pain du beurre du lait des yaourts du jambon"
+Reponse: {"items":[{"text":"pain","uncertain":false},{"text":"beurre","uncertain":false},{"text":"lait","uncertain":false},{"text":"yaourts","uncertain":false},{"text":"jambon","uncertain":false}]}
+
+REGLES CRITIQUES :
+- Chaque produit = un item separe, meme sans virgule ni ponctuation
+- "du/de la/des/le/la/les" avant un produit = nouveau produit distinct
+- uncertain:false = affirmation, liste directe, mot seul
+- uncertain:true = question, suggestion, doute ("faudrait", "devrait", "peut-etre", "?")
+- Supprimer les articles (du, de la, des, le, la) dans le champ text
+- Conserver les quantites (3, 300g, un, deux...)
+- Ne JAMAIS retourner items vide
+- Extraire UNIQUEMENT le produit/quantite, jamais la phrase entiere
+
+MESSAGE A ANALYSER: "${safeText}"
+Reponse JSON:`;
 
         const gRes = await fetch(
             'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + geminiKey,
@@ -720,33 +887,60 @@ Message : "${safeText}"`;
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { maxOutputTokens: 150, temperature: 0.1 }
+                    // System instruction séparée (rôle)
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
+                    contents: [{ role: 'user', parts: [{ text: fewShotPrompt }] }],
+                    generationConfig: {
+                        maxOutputTokens: 300,
+                        temperature: 0.1,        // exécution brute, pas conversationnel
+                        responseMimeType: 'application/json'  // force JSON natif
+                    }
                 })
             }
         );
 
         if (!gRes.ok) {
-            return res.json({ items: _fallbackExtract(text), source: 'fallback' });
+            const errText = await gRes.text();
+            console.error('[GEMINI] Erreur API:', gRes.status, errText.substring(0,100));
+            const simple = _fallbackExtract(text).map(t => ({ text: t, uncertain: false }));
+            return res.json({ items: simple, source: 'fallback' });
         }
 
         const gData = await gRes.json();
-        const raw = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '[]';
+        const raw = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
+        console.log('[GEMINI RAW] ---');
+        console.log(raw.substring(0, 500));
+        console.log('[GEMINI RAW] ---');
+
         let items = [];
         try {
             const clean = raw.replace(/```json|```/g, '').trim();
-            items = JSON.parse(clean);
-            if (!Array.isArray(items)) items = [];
+            const parsed = JSON.parse(clean);
+            // Accepter {items:[...]} ou directement [...]
+            const arr = Array.isArray(parsed) ? parsed : (parsed.items || []);
+            items = arr
+                .filter(i => i && typeof i.text === 'string' && i.text.trim().length > 1)
+                .map(i => ({ text: i.text.trim(), uncertain: !!i.uncertain }));
         } catch(e) {
-            items = _fallbackExtract(text);
+            console.warn('[GEMINI] JSON parse failed:', e.message, '| raw:', raw.substring(0,80));
+            items = _fallbackExtract(text).map(t => ({ text: t.trim(), uncertain: false }));
         }
-        items = items.filter(i => typeof i === 'string' && i.trim().length > 1);
-        console.log('[GEMINI] ' + items.length + ' items extraits de "' + text.substring(0,40) + '"');
-        res.json({ items, source: items.length ? 'gemini' : 'none' });
+
+        // Dernier filet : si toujours vide → fallback
+        if (items.length === 0 && text.trim().length > 1) {
+            const fb = _fallbackExtract(text);
+            items = fb.length > 0
+                ? fb.map(t => ({ text: t, uncertain: true }))
+                : [{ text: text.trim().substring(0, 60), uncertain: true }];
+        }
+
+        console.log('[GEMINI] ' + items.length + ' items extraits de "' + text.substring(0, 50) + '"');
+        res.json({ items, source: 'gemini' });
 
     } catch(err) {
         console.error('[AI EXTRACT-MULTI]', err.message);
-        res.json({ items: _fallbackExtract(req.body.text || ''), source: 'fallback' });
+        const simple = _fallbackExtract(req.body.text || '').map(t => ({ text: t, uncertain: false }));
+        res.json({ items: simple, source: 'fallback' });
     }
 });
 

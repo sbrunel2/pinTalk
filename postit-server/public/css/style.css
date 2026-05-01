@@ -90,10 +90,22 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
     padding: 10px 15px; 
     border-top: 2px solid var(--accent);
     z-index: 1500;
+    align-items: flex-end;
 }
 
 .btn-send { background: var(--accent); color: white; width: 42px; height: 42px; border: none; font-size: 18px; flex-shrink: 0; }
-#msg-input { flex-grow: 1; height: 42px; margin-bottom: 0; resize: none; }
+#msg-input {
+    flex-grow: 1;
+    min-height: 38px;
+    max-height: 120px;
+    height: auto;
+    margin-bottom: 0;
+    resize: none;
+    overflow-y: hidden;
+    line-height: 1.4;
+    padding: 8px 6px;
+    box-sizing: border-box;
+}
 
 .acc-item { border-bottom: 1px solid rgba(0,0,0,0.1); }
 .acc-trigger { display: none; }

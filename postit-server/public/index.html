@@ -382,7 +382,10 @@
             style="display:flex; align-items:center; justify-content:center; flex-shrink:0;">
         <span style="font-size:18px; line-height:1;">📎</span>
     </button>
-    <textarea id="msg-input" placeholder="Écrire un message…" data-i18n="writeMsg" style="flex:1; margin:0 5px;"></textarea>
+    <textarea id="msg-input" placeholder="Écrire un message…" data-i18n="writeMsg"
+        oninput="autoResizeInput(this)"
+        rows="1"
+        style="flex:1; margin:0 5px; resize:none; overflow:hidden; min-height:38px; max-height:120px; line-height:1.4;"></textarea>
     <button id="btn-mic" onclick="toggleRecording()" class="btn-send"
             style="display:flex;align-items:center;justify-content:center;flex-shrink:0;width:44px;height:44px;position:relative;"
             title="Dicter un message">
