@@ -7,15 +7,15 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI;
-if (!MONGODB_URI) {
-    console.error('❌ MONGODB_URI non défini dans .env');
+const MONGO_URI = process.env.MONGO_URI;
+if (!MONGO_URI) {
+    console.error('❌ MONGO_URI non défini dans .env');
     process.exit(1);
 }
 
 async function resetDB() {
     console.log('🔄 Connexion à MongoDB Atlas...');
-    await mongoose.connect(MONGODB_URI);
+    await mongoose.connect(MONGO_URI);
     console.log('✅ Connecté.');
 
     const db = mongoose.connection.db;
