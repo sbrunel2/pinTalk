@@ -167,7 +167,8 @@ const Message = mongoose.model('Message', {
     content: String, 
     senderName: String, 
     isNote:      { type: Boolean, default: false },
-    isUncertain: { type: Boolean, default: false },
+    isUncertain:     { type: Boolean, default: false },
+    sourceMessageId: { type: String,  default: '' },
     checked:     { type: Boolean, default: false }, 
     date: { type: Date, default: Date.now }, 
 	type: { type: String, default: 'text' }
@@ -711,7 +712,7 @@ function _splitByArticles(text) {
     text = text.replace(/\bEt\b/g, 'et').replace(/\bET\b/g, 'et');
     const nombresEcrits = /^(deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|quinze|vingt)$/i;
     const unitesSolo    = /^(g|kg|ml|l|cl|dl|gr)$/i;
-    const contenants    = /^(paquet|paquets|brique|briques|bouteille|bouteilles|bo[iî]te|bo[iî]tes|filet|filets|tranche|tranches|part|parts|pot|pots|barquette|barquettes|sachet|sachets|carton|cartons|pack|packs|c[oô]te|cotes|escalope|escalopes|r[oô]ti|rotis|morceau|morceaux|litre|litres|botte|bottes|flacon|flacons)$/i;
+    const contenants    = /^(paquet|paquets|brique|briques|bouteille|bouteilles|bo[iî]te|bo[iî]tes|filet|filets|tranche|tranches|part|parts|pot|pots|barquette|barquettes|sachet|sachets|carton|cartons|pack|packs|c[oô]te|cotes|escalope|escalopes|r[oô]ti|rotis|morceau|morceaux|litre|litres|botte|bottes|flacon|flacons|tablette|tablettes|plaquette|plaquettes|tube|tubes|boule|boules|portion|portions|demi|quart|quarts|bocal|bocaux|conserve|conserves|bouquet|bouquets|grappe|grappes|rouleau|rouleaux|bloc|blocs|dosette|dosettes|capsule|capsules|berlingot|berlingots|brick|bricks|paire|paires|paire|dizaine|dizaines|douzaine|douzaines|centaine|centaines|bouquet|bouquets|kilo|kilos|livre|livres)$/i;
     const nomsComposes  = /^(veau|boeuf|b[oœ]uf|porc|poulet|agneau|saumon|thon|cabillaud|lieu|sole|dinde|canard|lapin|ail|b[oœ]uf)$/i;
     const articlesSimples = /^(de|du|des|le|la|les|un|une|et)$/i;
 
@@ -781,14 +782,35 @@ function _splitByArticles(text) {
         .replace(/\u24B6DLES/g, 'des')
         .replace(/\s+/g, ' ').trim();
 
-    return items.map(restore).filter(s => s.length > 1) || null;
+    const result = items.map(restore).filter(s => s.length > 1);
+    return result.length > 1 ? result : null; // null si pas de séparation réelle
 }
 
 function _fallbackExtract(text) {
-    return text
+    // Essayer d'abord la séparation par articles/quantités
+    const bySplit = _splitByArticles(text);
+    if (bySplit && bySplit.length > 1) return bySplit;
+
+    // Séparation par ponctuation/conjonctions
+    const byPunct = text
         .split(/,|;|\s+et\s+|\s+puis\s+|\s+aussi\s+/i)
         .map(s => s.replace(/^(pense\s+[aà]|il\s+faut|acheter|prendre|ramener|ajouter)\s+/i, '').trim())
         .filter(s => s.length > 1);
+    if (byPunct.length > 1) return byPunct;
+
+    // Dernier recours : liste de mots séparés par espaces
+    // SEULEMENT si le texte ressemble à une liste sans structure (pas de "de/du/des" interne)
+    // "Choppa Chocapic pain beurre céréales" → chaque mot = produit incertain
+    // Mais "deux tablettes de chocolat" → garder tel quel (c'est un seul produit)
+    const hasArticleInside = /\b(de|du|des|de\s+la|de\s+l')\b/i.test(text);
+    if (!hasArticleInside) {
+        const words = text.trim().split(/\s+/).filter(w => w.length > 1);
+        if (words.length > 1) {
+            return words.map(w => '__WORD__' + w); // flag pour uncertain
+        }
+    }
+
+    return byPunct.length ? byPunct : [text.trim()];
 }
 
 // ── IA multi-items via Gemini ───────────────────────────────────────────────────
@@ -806,8 +828,12 @@ app.post('/api/ai/extract-multi', authenticateToken, async (req, res) => {
         const preSplit = _splitByArticles(text);
         if (!geminiKey) {
             // Sans Gemini : utiliser le pré-traitement + fallback
-            const parts = preSplit || _fallbackExtract(text);
-            const items = parts.map(t => ({ text: _stripArticle(t), uncertain: isQuestion }));
+            const parts = (preSplit && preSplit.length > 1) ? preSplit : _fallbackExtract(text);
+            const items = parts.map(t => {
+                const isWord = t.startsWith('__WORD__');
+                const txt    = isWord ? t.slice(8) : t.trim();
+                return { text: txt, uncertain: isWord || isQuestion };
+            });
             console.log('[FALLBACK] Items:', JSON.stringify(items));
             return res.json({ items, source: 'fallback' });
         }

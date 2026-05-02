@@ -3865,18 +3865,28 @@ function _sendTextMessage(text) {
 // Extrait PLUSIEURS items et les ajoute ligne par ligne dans le pintalk
 // Supprimer les notes IA liées à un message source (avant ré-analyse)
 async function _deleteAiNotesForMessage(sourceMessageId, postitId) {
-    // Les notes IA n'ont pas de lien direct avec le message source dans le modèle actuel
-    // Stratégie : supprimer TOUTES les notes IA du pintalk créées dans les 30s après ce message
     const sourceMsg = allMsgs.find(m => m._id === sourceMessageId);
     if (!sourceMsg) return;
-    const sourceTime = new Date(sourceMsg.date).getTime();
-    const windowMs   = 35000; // 35 secondes de fenêtre
-    const aiNotes = allMsgs.filter(m =>
+
+    // Priorité 1 : supprimer les notes liées par sourceMessageId exact
+    let aiNotes = allMsgs.filter(m =>
         m.postitId === postitId &&
         m.isNote &&
         m.senderName === '✨ IA' &&
-        Math.abs(new Date(m.date).getTime() - sourceTime) < windowMs
+        m.sourceMessageId === sourceMessageId
     );
+
+    // Priorité 2 : si aucune note liée, fenêtre temporelle étroite (10s)
+    if (!aiNotes.length) {
+        const sourceTime = new Date(sourceMsg.date).getTime();
+        aiNotes = allMsgs.filter(m =>
+            m.postitId === postitId &&
+            m.isNote &&
+            m.senderName === '✨ IA' &&
+            Math.abs(new Date(m.date).getTime() - sourceTime) < 10000
+        );
+    }
+
     for (const note of aiNotes) {
         try {
             await fetchAuth('/api/messages/' + note._id, { method: 'DELETE' });
@@ -3885,9 +3895,12 @@ async function _deleteAiNotesForMessage(sourceMessageId, postitId) {
     }
 }
 
-async function aiAutoExtract(text, postitId) {
+let _currentSourceMsgId = null; // ID du message source en cours d'analyse
+
+async function aiAutoExtract(text, postitId, sourceMessageId) {
     // Seuil minimal : 2 caractères et un pintalk cible
     if (!text || text.trim().length < 2 || !postitId) return;
+    _currentSourceMsgId = sourceMessageId || null;
     // SUPPRIMÉ : le filtre "moins de 3 mots" bloquait "biscottes", "pain", etc.
 
     console.log('[AI] Analyse du texte:', text.substring(0, 80));
@@ -3936,6 +3949,7 @@ async function aiAutoExtract(text, postitId) {
                 senderName: '✨ IA',
                 isNote: true,
                 isUncertain: uncertain,
+                sourceMessageId: _currentSourceMsgId || null,  // lien vers le message source
                 type: 'text'
             });
             await new Promise(r => setTimeout(r, 80));
@@ -3948,6 +3962,15 @@ async function aiAutoExtract(text, postitId) {
 function autoResizeInput(el) {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function togglePassVis(inputId, btn) {
+    const inp = document.getElementById(inputId);
+    if (!inp) return;
+    const isHidden = inp.type === 'password';
+    inp.type = isHidden ? 'text' : 'password';
+    btn.textContent = isHidden ? '🔒' : '👁';
+    btn.style.opacity = isHidden ? '0.7' : '0.5';
 }
 
 function send() {
@@ -3973,7 +3996,7 @@ function send() {
     input.blur();
     setTimeout(() => input.focus(), 50);
     // Analyse IA automatique en arrière-plan (silencieuse)
-    setTimeout(() => aiAutoExtract(text, pid), 300);
+    const _sendTs = Date.now(); setTimeout(() => aiAutoExtract(text, pid, 'ts_' + _sendTs), 300);
 }
 
 

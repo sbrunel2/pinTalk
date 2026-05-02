@@ -15,7 +15,16 @@
     <h1 class="text-4xl font-black mb-10 italic text-center tracking-tighter">e-POSTIT</h1>
     <input type="text"     id="auth-name"  placeholder="Nom complet" class="hidden">
     <input type="email"    id="auth-email" placeholder="Email" data-i18n="emailLabel">
-    <input type="password" id="auth-pass"  placeholder="Mot de passe">
+    <div style="position:relative;width:100%;margin-bottom:0;">
+        <input type="password" id="auth-pass" placeholder="Mot de passe"
+               style="width:100%;padding-right:44px;box-sizing:border-box;">
+        <button type="button" onclick="togglePassVis('auth-pass',this)"
+                style="position:absolute;right:0;top:0;height:100%;width:44px;
+                       background:none;border:none;cursor:pointer;font-size:18px;
+                       display:flex;align-items:center;justify-content:center;opacity:0.5;">
+            👁
+        </button>
+    </div>
     <button onclick="login()" id="auth-btn" class="btn-black h-14 mt-4 text-lg">Connexion</button>
     <p class="text-center mt-6 text-[10px] uppercase font-black cursor-pointer opacity-50"
        onclick="toggleAuthMode()" id="auth-toggle">Pas de compte ? Créer un compte</p>
