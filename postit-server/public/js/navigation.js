@@ -10,7 +10,6 @@ let touchstartX = 0;
 let touchendX   = 0;
 
 window.addEventListener('DOMContentLoaded', () => {
-    // Toujours démarrer sur Groupes — initApp() gère la navigation vers le dernier pintalk
     goToPage(PAGE_GROUPES);
 
     const viewport = document.getElementById('viewport');
@@ -31,8 +30,18 @@ window.addEventListener('DOMContentLoaded', () => {
 function handleGesture() {
     const threshold = 60;
     if (currentPage === PAGE_PREP) return;
-    if (touchendX < touchstartX - threshold && currentPage < PAGE_CHAT) goToPage(currentPage + 1);
-    if (touchendX > touchstartX + threshold && currentPage > PAGE_ARCHIVES) goToPage(currentPage - 1);
+
+    // PAGE_GROUPES : swipe droite → Paramètres uniquement
+    if (currentPage === PAGE_GROUPES) {
+        if (touchendX > touchstartX + threshold) goToPage(PAGE_PARAMS);
+    }
+
+    // PAGE_PARAMS : swipe gauche → retour Groupes uniquement
+    if (currentPage === PAGE_PARAMS) {
+        if (touchendX < touchstartX - threshold) goToPage(PAGE_GROUPES);
+    }
+
+    // PAGE_CHAT et PAGE_ARCHIVES : aucun swipe
 }
 
 function goToPage(index) {
@@ -55,17 +64,15 @@ function goToPage(index) {
     if (index !== PAGE_PREP) localStorage.setItem('lastPage', index);
     if (index === PAGE_GROUPES && typeof loadGroupsList === 'function') loadGroupsList();
     if (index === PAGE_GROUPES && typeof _initPinchGestures === 'function') {
-        // Réinitialiser les gestures pinch à chaque visite de la page groupes
         setTimeout(_initPinchGestures, 100);
     }
     if (index === PAGE_ARCHIVES && typeof initArchiveSelectors === 'function') initArchiveSelectors();
     if (index === PAGE_PARAMS && typeof loadProfile === 'function') loadProfile();
 
-    // Alterner titre / tuiles postits dans l'entête
-    const hpt     = document.getElementById('header-pintalk-tabs');
-    const ptWrap  = document.getElementById('header-title-wrap');
-    const spacer  = document.getElementById('header-spacer');
-    const onChat  = (index === PAGE_CHAT);
+    const hpt    = document.getElementById('header-pintalk-tabs');
+    const ptWrap = document.getElementById('header-title-wrap');
+    const spacer = document.getElementById('header-spacer');
+    const onChat = (index === PAGE_CHAT);
     if (hpt)    hpt.style.display    = onChat ? 'flex' : 'none';
     if (ptWrap) ptWrap.style.display = onChat ? 'none' : 'flex';
     if (spacer) spacer.style.display = onChat ? 'none' : 'flex';

@@ -10,3 +10,4 @@ postit-server/.env
 *.hex
 *.bin
 postit-server/info.txt
+postit-server/.clinerules

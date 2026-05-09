@@ -65,7 +65,10 @@ const upload = multer({ storage: storage });
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/postit_pro_v2';
 mongoose.connect(MONGO_URI)
-  .then(() => console.log("✅ Connecté à MongoDB"))
+  .then(async () => {
+      console.log("✅ Connecté à MongoDB");
+      try { await _refreshAiDictionaryCache(); } catch(e) {}
+  })
   .catch(err => console.error("❌ Erreur de connexion MongoDB:", err));
 
 const userSchema = new mongoose.Schema({
@@ -182,6 +185,20 @@ const Archive = mongoose.model('Archive', {
     archivedAt: { type: Date, default: Date.now },
     adminId: String 
 });
+
+const aiDictionaryEntrySchema = new mongoose.Schema({
+    phrase:       { type: String, required: true, trim: true },
+    normalized:   { type: String, required: true, trim: true, index: true },
+    lang:         { type: String, default: 'fr', trim: true, index: true },
+    category:     { type: String, default: '', trim: true },
+    active:       { type: Boolean, default: true, index: true },
+    scope:        { type: String, enum: ['global', 'user'], default: 'user', index: true },
+    ownerEmail:   { type: String, default: '', trim: true, index: true },
+    createdBy:    { type: String, default: '', trim: true },
+}, { timestamps: true });
+
+aiDictionaryEntrySchema.index({ normalized: 1, lang: 1, scope: 1, ownerEmail: 1 }, { unique: true });
+const AiDictionaryEntry = mongoose.model('AiDictionaryEntry', aiDictionaryEntrySchema);
 
 app.use((req, res, next) => {
     const origin = req.headers.origin;
@@ -349,6 +366,133 @@ const authenticateToken = (req, res, next) => {
 app.use('/api', (req, res, next) => {
     if (req.path === '/login' || req.path === '/register') return next();
     return authenticateToken(req, res, next);
+});
+
+app.get('/api/ai-dictionary', async (req, res) => {
+    try {
+        await _ensureAiDictionaryCacheFresh();
+        const userEmail = String(req.user?.email || '').toLowerCase();
+        const userLang = await _resolveUserLang(userEmail);
+        const lang = String(req.query.lang || userLang || 'fr').toLowerCase();
+        const includeGlobal = req.query.scope !== 'user';
+        const includeUser = req.query.scope !== 'global';
+
+        const entries = [];
+        if (includeGlobal) {
+            entries.push(..._aiDictCache.entries.filter(e => e.scope === 'global' && (e.lang === lang || e.lang === 'all')));
+        }
+        if (includeUser && userEmail) {
+            entries.push(...(_aiDictCache.byUser.get(userEmail) || []).filter(e => e.lang === lang || e.lang === 'all'));
+        }
+
+        res.json({
+            items: entries.map(e => ({
+                _id: e.id,
+                phrase: e.phrase,
+                normalized: e.normalized,
+                lang: e.lang,
+                category: e.category,
+                scope: e.scope,
+                ownerEmail: e.ownerEmail
+            }))
+        });
+    } catch (e) {
+        res.status(500).json({ message: 'Erreur lecture dictionnaire IA' });
+    }
+});
+
+app.post('/api/ai-dictionary', async (req, res) => {
+    try {
+        const phrase = String(req.body?.phrase || '').trim();
+        if (!phrase) return res.status(400).json({ message: 'phrase requise' });
+
+        const userLang = await _resolveUserLang(req.user?.email || '');
+        const lang = String(req.body?.lang || userLang || 'fr').trim().toLowerCase();
+        if (!/^(fr|en|es|de|it|all)$/.test(lang)) {
+            return res.status(400).json({ message: 'lang invalide (fr,en,es,de,it,all)' });
+        }
+        const requestedScope = String(req.body?.scope || 'user').toLowerCase();
+        const canGlobal = _isDictionaryAdmin(req.user?.email);
+        const scope = (requestedScope === 'global' && canGlobal) ? 'global' : 'user';
+        const ownerEmail = scope === 'user' ? String(req.user?.email || '').toLowerCase() : '';
+        const normalized = _normalizePhraseKey(phrase);
+        if (!normalized) return res.status(400).json({ message: 'phrase invalide' });
+
+        const doc = await AiDictionaryEntry.create({
+            phrase,
+            normalized,
+            lang,
+            category: String(req.body?.category || '').trim(),
+            active: req.body?.active !== false,
+            scope,
+            ownerEmail,
+            createdBy: String(req.user?.email || '').toLowerCase()
+        });
+        await _refreshAiDictionaryCache();
+        res.status(201).json({ item: doc });
+    } catch (e) {
+        if (e?.code === 11000) {
+            return res.status(409).json({ message: 'Entrée déjà existante' });
+        }
+        res.status(500).json({ message: 'Erreur création dictionnaire IA' });
+    }
+});
+
+app.patch('/api/ai-dictionary/:id', async (req, res) => {
+    try {
+        const doc = await AiDictionaryEntry.findById(req.params.id);
+        if (!doc) return res.status(404).json({ message: 'Entrée introuvable' });
+
+        const userEmail = String(req.user?.email || '').toLowerCase();
+        const isAdmin = _isDictionaryAdmin(userEmail);
+        const canEdit =
+            (doc.scope === 'user' && String(doc.ownerEmail || '').toLowerCase() === userEmail) ||
+            (doc.scope === 'global' && isAdmin);
+        if (!canEdit) return res.status(403).json({ message: 'Accès refusé' });
+
+        if (typeof req.body?.phrase === 'string' && req.body.phrase.trim()) {
+            doc.phrase = req.body.phrase.trim();
+            doc.normalized = _normalizePhraseKey(doc.phrase);
+        }
+        if (typeof req.body?.lang === 'string' && req.body.lang.trim()) {
+            const newLang = req.body.lang.trim().toLowerCase();
+            if (!/^(fr|en|es|de|it|all)$/.test(newLang)) {
+                return res.status(400).json({ message: 'lang invalide (fr,en,es,de,it,all)' });
+            }
+            doc.lang = newLang;
+        }
+        if (typeof req.body?.category === 'string') doc.category = req.body.category.trim();
+        if (typeof req.body?.active === 'boolean') doc.active = req.body.active;
+
+        await doc.save();
+        await _refreshAiDictionaryCache();
+        res.json({ item: doc });
+    } catch (e) {
+        if (e?.code === 11000) {
+            return res.status(409).json({ message: 'Entrée déjà existante' });
+        }
+        res.status(500).json({ message: 'Erreur mise à jour dictionnaire IA' });
+    }
+});
+
+app.delete('/api/ai-dictionary/:id', async (req, res) => {
+    try {
+        const doc = await AiDictionaryEntry.findById(req.params.id);
+        if (!doc) return res.status(404).json({ message: 'Entrée introuvable' });
+
+        const userEmail = String(req.user?.email || '').toLowerCase();
+        const isAdmin = _isDictionaryAdmin(userEmail);
+        const canDelete =
+            (doc.scope === 'user' && String(doc.ownerEmail || '').toLowerCase() === userEmail) ||
+            (doc.scope === 'global' && isAdmin);
+        if (!canDelete) return res.status(403).json({ message: 'Accès refusé' });
+
+        await AiDictionaryEntry.deleteOne({ _id: doc._id });
+        await _refreshAiDictionaryCache();
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ message: 'Erreur suppression dictionnaire IA' });
+    }
 });
 
 // ── Profil utilisateur ─────────────────────────────────────────────────────
@@ -696,6 +840,192 @@ app.delete('/api/user/account', authenticateToken, async (req, res) => {
 
 // ── Helpers d'extraction ─────────────────────────────────────────────────────
 
+const _baseProtectedCompoundPhrases = [
+    'sacs poubelle', 'sacs en plastique', 'pommes de terre',
+    'gigot d agneau', 'cote de boeuf', 'cote de porc', 'escalope de veau',
+    'papier toilette', 'papier essuie tout', 'huile d olive', 'lait de coco',
+    'beurre de cacahuete', 'creme fraiche', 'jus d orange',
+    'liquide vaisselle', 'gel douche', 'champignons de paris',
+    'coquilles saint jacques', 'balais essuie glace', 'huile moteur',
+    'liquide de refroidissement', 'liquide de frein', 'filtre a huile',
+    'filtre a air', 'plaquettes de frein', 'papier de verre', 'laine de roche'
+];
+
+const _aiDictCache = {
+    loadedAt: 0,
+    entries: [],
+    byUser: new Map(),
+    byLang: new Map()
+};
+const _AI_DICT_CACHE_TTL_MS = 60 * 1000;
+const _AI_DICTIONARY_ADMIN_EMAILS = (process.env.AI_DICTIONARY_ADMIN_EMAILS || '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+
+function _normalizePhraseKey(text) {
+    return String(text || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/['’]/g, ' ')
+        .replace(/[^a-zA-Z0-9\s-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function _escapeRegexLiteral(text) {
+    return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function _accentInsensitiveCharClass(ch) {
+    const map = {
+        a: '[aàáâäãå]',
+        c: '[cç]',
+        e: '[eèéêë]',
+        i: '[iìíîï]',
+        o: '[oòóôöõ]',
+        u: '[uùúûü]',
+        y: '[yÿ]'
+    };
+    return map[ch] || _escapeRegexLiteral(ch);
+}
+
+function _tokenToFlexibleRegex(token) {
+    const t = String(token || '').trim().toLowerCase();
+    if (!t) return '';
+    const stop = /^(de|du|des|la|le|les|a|au|aux|en|d)$/;
+    const chars = t.split('').map(_accentInsensitiveCharClass).join('');
+    if (stop.test(t)) return chars;
+    // Pluriels irréguliers courants FR: couteau/couteaux, animal/animaux, etc.
+    if (t.endsWith('eau')) {
+        const stem = t.slice(0, -3).split('').map(_accentInsensitiveCharClass).join('');
+        return `${stem}eau(?:x)?`;
+    }
+    if (t.endsWith('al')) {
+        const stem = t.slice(0, -2).split('').map(_accentInsensitiveCharClass).join('');
+        return `${stem}(?:al|aux)`;
+    }
+    if (t.endsWith('ail')) {
+        const stem = t.slice(0, -3).split('').map(_accentInsensitiveCharClass).join('');
+        return `${stem}(?:ail|aux|ails)`;
+    }
+    // Rend les variantes singulier/pluriel plus robustes (huitre/huitres, etc.)
+    if (t.endsWith('s')) return `${chars}?`;
+    return `${chars}s?`;
+}
+
+function _compileDictionaryPhraseRegex(phrase) {
+    const key = _normalizePhraseKey(phrase);
+    if (!key) return null;
+    const tokens = key.split(/\s+/).filter(Boolean);
+    if (!tokens.length) return null;
+    // IMPORTANT : permettre la liaison par apostrophe (d'agneau, l'huile, etc.)
+    // Les tokens sont normalisés sans apostrophes, donc on doit matcher aussi "'" / "’"
+    // comme séparateur possible entre deux tokens.
+    const joiner = "(?:[\\s-]+|['’])";
+    const pattern = tokens.map(_tokenToFlexibleRegex).join(joiner);
+    return new RegExp(`\\b${pattern}\\b`, 'gi');
+}
+
+function _isDictionaryAdmin(email) {
+    const e = String(email || '').trim().toLowerCase();
+    return !!e && _AI_DICTIONARY_ADMIN_EMAILS.includes(e);
+}
+
+async function _resolveUserLang(email) {
+    const safe = String(email || '').toLowerCase();
+    if (!safe) return 'fr';
+    try {
+        const u = await User.findOne({ email: safe }).select('lang').lean();
+        return String(u?.lang || 'fr').toLowerCase();
+    } catch (e) {
+        return 'fr';
+    }
+}
+
+async function _refreshAiDictionaryCache() {
+    const rows = await AiDictionaryEntry.find({ active: true }).lean();
+    const byUser = new Map();
+    const byLang = new Map();
+    const entries = [];
+
+    for (const row of rows) {
+        const regex = _compileDictionaryPhraseRegex(row.phrase || row.normalized);
+        if (!regex) continue;
+        const rec = {
+            id: String(row._id),
+            phrase: row.phrase,
+            normalized: row.normalized,
+            lang: String(row.lang || 'fr').toLowerCase(),
+            category: row.category || '',
+            scope: row.scope || 'user',
+            ownerEmail: (row.ownerEmail || '').toLowerCase(),
+            regex
+        };
+        entries.push(rec);
+        if (!byLang.has(rec.lang)) byLang.set(rec.lang, []);
+        byLang.get(rec.lang).push(rec);
+        if (rec.scope === 'user' && rec.ownerEmail) {
+            if (!byUser.has(rec.ownerEmail)) byUser.set(rec.ownerEmail, []);
+            byUser.get(rec.ownerEmail).push(rec);
+        }
+    }
+
+    _aiDictCache.loadedAt = Date.now();
+    _aiDictCache.entries = entries;
+    _aiDictCache.byUser = byUser;
+    _aiDictCache.byLang = byLang;
+}
+
+async function _ensureAiDictionaryCacheFresh() {
+    const expired = !_aiDictCache.loadedAt || (Date.now() - _aiDictCache.loadedAt) > _AI_DICT_CACHE_TTL_MS;
+    if (!expired) return;
+    try {
+        await _refreshAiDictionaryCache();
+    } catch (e) {
+        console.warn('[AI-DICTIONARY] Cache refresh error:', e.message);
+    }
+}
+
+async function _normalizeTextWithAiDictionary(text, userEmail, lang = 'fr') {
+    let out = String(text || '');
+    if (!out) return out;
+
+    await _ensureAiDictionaryCacheFresh();
+
+    const targetLang = String(lang || 'fr').toLowerCase();
+    const includeBaseFrench = targetLang.startsWith('fr');
+    const allRecords = [];
+    if (includeBaseFrench) {
+        for (const phrase of _baseProtectedCompoundPhrases) {
+            const regex = _compileDictionaryPhraseRegex(phrase);
+            if (regex) allRecords.push({ regex, normalized: phrase });
+        }
+    }
+    const langEntries = _aiDictCache.byLang?.get(targetLang) || [];
+    const allLangEntries = _aiDictCache.byLang?.get('all') || [];
+    allRecords.push(...langEntries.filter(e => e.scope === 'global'));
+    allRecords.push(...allLangEntries.filter(e => e.scope === 'global'));
+    const mail = String(userEmail || '').toLowerCase();
+    if (mail && _aiDictCache.byUser.has(mail)) {
+        const userEntries = _aiDictCache.byUser.get(mail).filter(e => e.lang === targetLang || e.lang === 'all');
+        allRecords.push(...userEntries);
+    }
+
+    // Les expressions longues d'abord pour eviter qu'une courte "mange" une longue.
+    allRecords.sort((a, b) => {
+        const al = (a.normalized || '').length;
+        const bl = (b.normalized || '').length;
+        return bl - al;
+    });
+
+    for (const rec of allRecords) {
+        out = out.replace(rec.regex, (m) => m.replace(/[\s-]+/g, '-'));
+    }
+    return out;
+}
+
 function _stripArticle(text) {
     return text
         .replace(/^(du|de\s+la|de\s+l['\u2019]|des|une?|le|la|les|d['\u2019])\s*/i, '')
@@ -710,17 +1040,20 @@ function _isQuestion(text) {
 // "100g de steak haché 300g de rôti de veau six paupiettes Un paquet de lardons" → 4 items
 function _splitByArticles(text) {
     text = text.replace(/\bEt\b/g, 'et').replace(/\bET\b/g, 'et');
+    // Fusionner "500 g" → "500g", "300 ml" → "300ml" etc. (quantité + unité séparés par espace)
+    text = text.replace(/(\d+[.,]?\d*)\s+(g|gr|kg|ml|cl|dl|l)\b/gi, '$1$2');
     const nombresEcrits = /^(deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|quinze|vingt)$/i;
-    const unitesSolo    = /^(g|kg|ml|l|cl|dl|gr)$/i;
+    const unitesSolo     = /^(g|kg|ml|l|cl|dl|gr)$/i;
+    const quantiteCollée = /^\d+[\.,]?\d*\s*(g|gr|kg|ml|cl|dl|l)$/i; // ex: 500g, 45g, 1.5kg
     const contenants    = /^(paquet|paquets|brique|briques|bouteille|bouteilles|bo[iî]te|bo[iî]tes|filet|filets|tranche|tranches|part|parts|pot|pots|barquette|barquettes|sachet|sachets|carton|cartons|pack|packs|c[oô]te|cotes|escalope|escalopes|r[oô]ti|rotis|morceau|morceaux|litre|litres|botte|bottes|flacon|flacons|tablette|tablettes|plaquette|plaquettes|tube|tubes|boule|boules|portion|portions|demi|quart|quarts|bocal|bocaux|conserve|conserves|bouquet|bouquets|grappe|grappes|rouleau|rouleaux|bloc|blocs|dosette|dosettes|capsule|capsules|berlingot|berlingots|brick|bricks|paire|paires|paire|dizaine|dizaines|douzaine|douzaines|centaine|centaines|bouquet|bouquets|kilo|kilos|livre|livres)$/i;
-    const nomsComposes  = /^(veau|boeuf|b[oœ]uf|porc|poulet|agneau|saumon|thon|cabillaud|lieu|sole|dinde|canard|lapin|ail|b[oœ]uf)$/i;
+    const nomsComposes  = /^(veau|boeuf|b[oœ]uf|porc|poulet|poulets|agneau|saumon|thon|cabillaud|lieu|sole|dinde|canard|lapin|ail|blanc|blanche|cuisse|cuisses|filet|filets|escalope|escalopes|gigot|jarret|palette|travers)$/i;
     const articlesSimples = /^(de|du|des|le|la|les|un|une|et)$/i;
 
-    // Pré-tokeniser les articles composés "de la/le/les/l'" → tokens Ⓐ
+    // Pré-tokeniser les articles composés "de la/le/les/l'" → tokens __ART*__
     let t = text
-        .replace(/\bde\s+l['\u2019]/gi, '\u24B6DEL')
-        .replace(/\bde\s+la\b/gi,       '\u24B6DELA')
-        .replace(/\bde\s+les?\b/gi,     '\u24B6DLES');
+        .replace(/\bde\s+l['\u2019]/gi, '__ARTDEL__ ')
+        .replace(/\bde\s+la\b/gi,       '__ARTDEL__A')
+        .replace(/\bde\s+les?\b/gi,     '__ARTDLES__ ');
 
     const words = t.trim().split(/\s+/);
     const boundaries = new Set();
@@ -729,15 +1062,21 @@ function _splitByArticles(text) {
         const w    = words[i];
         const prev = words[i-1].toLowerCase();
         const next = (words[i+1] || '').toLowerCase();
-        const prevIsUnit      = unitesSolo.test(prev);
+        const prevIsUnit      = unitesSolo.test(prev) || quantiteCollée.test(prev);
         const prevIsContenant = contenants.test(prev);
-        const prevIsArtToken  = /^\u24B6/.test(words[i-1]);
+        const prevIsArtToken  = /^__ART/i.test(words[i-1]);
         const nextIsNum       = /^\d/.test(next) || unitesSolo.test(next);
         // Mot précédent est un vrai mot produit (pas article, pas unité, pas contenant)
+        const prevIsNombreEcrit = nombresEcrits.test(prev);
         const prevIsRealWord  = prev.length > 1
                                 && !prevIsUnit && !prevIsContenant
+                                && !prevIsNombreEcrit          // pas un nombre écrit (deux, trois...)
                                 && !articlesSimples.test(prev)
-                                && !/^\u24B6/.test(prev);
+                                && !nomsComposes.test(prev)    // pas un nom composé (blanc, cuisse...)
+                                && !/^__ART/i.test(prev);
+
+        // Adjectifs qui restent attachés au mot précédent (pas de coupure)
+        const adjectifs = /^(hach[eé][es]?|r[aâ]p[eé][es]?|fum[eé][es]?|grill[eé][es]?|cuite?s?|crue?s?|frais|fra[iî]ches?|surgel[eé][es]?|entiers?|demi|[eé]minc[eé][es]?|tranch[eé][es]?|allum[eé][es]?|assaisonn[eé][es]?|sal[eé][es]?|sucr[eé][es]?|petits?|grands?|fins?|gros|grosses?|bio|nature|light|rouge|blanc|blanche|noir|noire|vert|verte|jaune|dur[es]?|sec|s[eè]ches?|chaud[es]?|froid[es]?|ti[eè]des?|maigres?|gras|grasse|tendre|tendres?|moelleux|extra|double|triple)$/i;
 
         const isNewItem =
             // Chiffre (sauf après article)
@@ -751,12 +1090,23 @@ function _splitByArticles(text) {
             // Articles simples (sauf après contenant)
             (/^(du|des|le|la|les)$/i.test(w) && !prevIsContenant) ||
             // Token article composé (sauf après contenant)
-            (/^\u24B6/.test(w) && !prevIsContenant) ||
-            // "de" simple (sauf après unité/contenant/avant nom composé ou chiffre)
+            (/^__ART/i.test(w) && !prevIsContenant) ||
+            // "de" simple (sauf après unité/contenant/quantité collée/avant nom composé ou chiffre)
             (/^de$/i.test(w) && !prevIsUnit && !prevIsContenant
+             && !quantiteCollée.test(prev)
              && !nomsComposes.test(next) && !nextIsNum) ||
             // "et" → séparateur
-            /^et$/i.test(w);
+            /^et$/i.test(w) ||
+            // MOT NORMAL après MOT NORMAL = frontière entre deux produits distincts
+            // "Céréales Adoucissant" → 2 items | "pain beurre" → 2 items
+            // Exception : adjectifs qualificatifs collés au mot précédent
+            (prevIsRealWord
+             && !adjectifs.test(w)          // pas un adjectif qualificatif
+             && !unitesSolo.test(w)          // pas une unité (g, kg...)
+             && !nomsComposes.test(w)        // pas suite d'un nom composé (veau, bœuf...)
+             && !/^\d/.test(w)              // pas un chiffre
+             && !/^__ART/i.test(w)           // pas un token article
+             && !/^[àa]$/i.test(w));         // pas "à" (ex: chair à saucisse)
 
         if (isNewItem) boundaries.add(i);
     }
@@ -777,9 +1127,10 @@ function _splitByArticles(text) {
 
     // Restaurer les tokens articles composés
     const restore = s => s
-        .replace(/\u24B6DELA/g, 'de la')
-        .replace(/\u24B6DEL/g,  "de l'")
-        .replace(/\u24B6DLES/g, 'des')
+        .replace(/__ARTDEL__A\s*/g, 'de la ')   // de la + espace normalisé
+        .replace(/__ARTDEL__\s*/g,  "de l'")     // de l' sans espace superflu
+        .replace(/__ARTDLES__\s*/g, 'des ')      // des + espace
+        .replace(/,\s*$/, '')                    // supprimer virgule finale
         .replace(/\s+/g, ' ').trim();
 
     const result = items.map(restore).filter(s => s.length > 1);
@@ -787,14 +1138,19 @@ function _splitByArticles(text) {
 }
 
 function _fallbackExtract(text) {
+    // Fusionner "500 g" → "500g" avant tout traitement
+    text = text.replace(/(\d+[.,]?\d*)\s+(g|gr|kg|ml|cl|dl|l)\b/gi, '$1$2');
     // Essayer d'abord la séparation par articles/quantités
     const bySplit = _splitByArticles(text);
     if (bySplit && bySplit.length > 1) return bySplit;
 
     // Séparation par ponctuation/conjonctions
     const byPunct = text
-        .split(/,|;|\s+et\s+|\s+puis\s+|\s+aussi\s+/i)
-        .map(s => s.replace(/^(pense\s+[aà]|il\s+faut|acheter|prendre|ramener|ajouter)\s+/i, '').trim())
+        .split(/(?<!\d),(?!\d)|;|\s+et\s+|\s+puis\s+|\s+aussi\s+/i)
+        .map(s => s
+            .replace(/^(pense\s+[aà]|il\s+faut|acheter|prendre|ramener|ajouter)\s+/i, '')
+            .replace(/[,;.!?]+$/, '')  // supprimer ponctuation finale
+            .trim())
         .filter(s => s.length > 1);
     if (byPunct.length > 1) return byPunct;
 
@@ -813,27 +1169,145 @@ function _fallbackExtract(text) {
     return byPunct.length ? byPunct : [text.trim()];
 }
 
+function _cleanExtractedItemText(text) {
+    if (!text) return '';
+    return String(text)
+        // Annuler la "protection" dictionnaire (espaces -> '-') pour l'affichage final.
+        // Sinon on se retrouve avec "gigot-d'agneau" au lieu de "gigot d'agneau".
+        .replace(/-+(?=[a-zA-ZÀ-ÿ0-9])/g, ' ')
+        .replace(/^(?:[\-–—•]|\d+[.)\s])\s*/, '')  // retire puces/numéros de liste uniquement
+        .replace(/^(?:oui|ok|okay|d['’]accord|stp|svp|please)\s+/i, '')
+        .replace(/^(?:est[\s-]*ce\s+que|est[\s-]*ce\s+qu['’]|faut[\s-]*il|il\s+faut(?:rait)?|faudrait(?:[\s-]*il)?|devrait(?:[\s-]*on)?|pourrait(?:[\s-]*on)?|a[\s-]*t[\s-]*on\s+besoin\s+de|avons[\s-]*nous\s+besoin\s+de|dois[\s-]*je(?:\s+prendre)?|doit[\s-]*on(?:\s+prendre)?|je\s+dois(?:\s+prendre)?|n['’]oublie\s+pas(?:\s+de)?|pense\s+[aà]|on\s+prend|prends?|prendre|acheter|ach[eè]te|ajouter|ajoute|ramener|ram[eè]ne)\s+/i, '')
+        .replace(/\s+(?:stp|svp|please|merci)\s*$/i, '')
+        .replace(/[.?!,;:]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function _normalizeProductKey(text) {
+    return String(text || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[’']/g, ' ')
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .replace(/^(du|de la|de l|des|de|le|la|les|un|une)\s+/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function _isLikelyProductText(text) {
+    const key = _normalizeProductKey(text);
+    if (!key) return false;
+    const words = key.split(/\s+/).filter(Boolean);
+    if (!words.length) return false;
+
+    const junk = new Set([
+        'est', 'ce', 'est ce', 'que', 'je', 'tu', 'il', 'elle', 'on', 'nous', 'vous', 'ils', 'elles',
+        'dois', 'doit', 'doivent', 'prendre', 'achete', 'acheter', 'ajouter', 'ajoute', 'ramener',
+        'faudrait', 'devrait', 'pourrait', 'faut', 'faut il', 'a t on besoin de', 'dois je', 'dois je prendre',
+        'est ce que je dois prendre', 'oui', 'non', 'ok', 'd accord',
+        // Déterminants / quantités isolées : ne sont pas des produits
+        'un', 'une', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix',
+        'onze', 'douze', 'quinze', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante',
+        'cent', 'mille'
+    ]);
+    if (junk.has(key)) return false;
+
+    if (words.length === 1) {
+        const w = words[0];
+        // nombre isolé sans unité → rejeté
+        if (/^\d+$/.test(w)) return false;
+        // quantité+unité collée isolée (ex: "500g") → valide comme produit
+        if (/^\d+[\.,]?\d*(g|gr|kg|ml|cl|dl|l)$/i.test(w)) return true;
+        if (/^(est|ce|que|je|tu|il|elle|on|nous|vous|ils|elles|dois|doit|prendre|acheter|ajouter|ramener|oui|non|ok)$/.test(w)) {
+            return false;
+        }
+    }
+
+    // Rejeter explicitement les bouts de phrase interrogative les plus fréquents.
+    if (/^(est ce|est ce que|ce que|que je|je dois|dois je|il faut|faut il|ne faudrait|devrais je)/.test(key)) {
+        return false;
+    }
+    if (/^(a t on besoin de|avons nous besoin de|dois je prendre|est ce que je dois prendre)/.test(key)) {
+        return false;
+    }
+
+    return true;
+}
+
+function _mergeStandaloneQuantities(items) {
+    if (!Array.isArray(items) || items.length < 2) return items;
+    const isQty = (t) => {
+        const s = String(t || '').trim().toLowerCase();
+        if (!s) return false;
+        if (/^\d+$/.test(s)) return true;
+        return new Set([
+            'un','une','deux','trois','quatre','cinq','six','sept','huit','neuf','dix',
+            'onze','douze','quinze','vingt','trente','quarante','cinquante','soixante',
+            'cent','mille'
+        ]).has(s);
+    };
+
+    const out = [];
+    for (let i = 0; i < items.length; i++) {
+        const cur = items[i];
+        const next = items[i + 1];
+        if (cur && next && isQty(cur.text) && typeof next.text === 'string' && next.text.trim().length > 1) {
+            const merged = {
+                ...next,
+                text: `${String(cur.text).trim()} ${String(next.text).trim()}`
+            };
+            out.push(merged);
+            i++; // skip next
+            continue;
+        }
+        out.push(cur);
+    }
+    return out;
+}
+
 // ── IA multi-items via Gemini ───────────────────────────────────────────────────
+const _aiExtractLock = new Set();
+
 app.post('/api/ai/extract-multi', authenticateToken, async (req, res) => {
     try {
-        const { text } = req.body;
-        console.log('[EXTRACT-MULTI] Reçu:', JSON.stringify(text).substring(0, 100));
-        if (!text || text.length < 2) return res.status(400).send('Texte vide.');
+        const { text: rawText, sourceMessageId } = req.body;
+        console.log('[EXTRACT-MULTI] Reçu:', JSON.stringify(rawText).substring(0, 100), '| srcMsgId:', sourceMessageId || 'AUCUN');
+        if (!rawText || rawText.length < 2) return res.status(400).send('Texte vide.');
+        if (sourceMessageId) {
+            if (_aiExtractLock.has(sourceMessageId)) {
+                console.warn('[EXTRACT-MULTI] ⛔ Doublon bloqué pour:', sourceMessageId);
+                return res.status(429).json({ items: [], source: 'duplicate_blocked' });
+            }
+            _aiExtractLock.add(sourceMessageId);
+            setTimeout(() => _aiExtractLock.delete(sourceMessageId), 15000);
+        }
 
+        const userEmail = req.user?.email || '';
+        const userLang = await _resolveUserLang(userEmail);
+        // Fusionner "500 g" → "500g", "1,5 kg" → "1,5kg" dès la réception (évite const reassign)
+        const text = rawText.replace(/(\d+[.,]?\d*)\s+(g|gr|kg|ml|cl|dl|l)\b/gi, '$1$2');
+        const normalizedText = await _normalizeTextWithAiDictionary(text, userEmail, userLang);
         const geminiKey = process.env.GEMINI_API_KEY;
-        const isQuestion = _isQuestion(text);
+        const isQuestion = _isQuestion(normalizedText);
 
         // ── Pré-traitement : séparer par articles avant Gemini ─────────────
         // "du pain du beurre" → ["pain", "beurre"]
-        const preSplit = _splitByArticles(text);
+        const preSplit = isQuestion ? null : _splitByArticles(normalizedText);
         if (!geminiKey) {
             // Sans Gemini : utiliser le pré-traitement + fallback
-            const parts = (preSplit && preSplit.length > 1) ? preSplit : _fallbackExtract(text);
+            const parts = (preSplit && preSplit.length > 1) ? preSplit : _fallbackExtract(normalizedText);
+            const uniq = new Set();
             const items = parts.map(t => {
                 const isWord = t.startsWith('__WORD__');
-                const txt    = isWord ? t.slice(8) : t.trim();
+                const txtRaw = isWord ? t.slice(8) : t.trim();
+                const txt = _cleanExtractedItemText(txtRaw);
+                const key = _normalizeProductKey(txt);
+                if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
+                uniq.add(key);
                 return { text: txt, uncertain: isWord || isQuestion };
-            });
+            }).filter(Boolean);
             console.log('[FALLBACK] Items:', JSON.stringify(items));
             return res.json({ items, source: 'fallback' });
         }
@@ -841,13 +1315,20 @@ app.post('/api/ai/extract-multi', authenticateToken, async (req, res) => {
         // Si pré-traitement a trouvé plusieurs items ET pas de Gemini nécessaire
         // (liste simple sans question) → bypass Gemini pour vitesse
         if (preSplit && preSplit.length > 1 && !isQuestion &&
-            !text.match(/faudrait|devrait|acheter|prendre|pense|oublie|peut.être/i)) {
-            const items = preSplit.map(t => ({ text: t.trim(), uncertain: false }));
+            !normalizedText.match(/faudrait|devrait|acheter|prendre|pense|oublie|peut.être/i)) {
+            const uniq = new Set();
+            const items = preSplit.map(t => {
+                const txt = _cleanExtractedItemText(t.trim());
+                const key = _normalizeProductKey(txt);
+                if (!txt || !key || uniq.has(key)) return null;
+                uniq.add(key);
+                return { text: txt, uncertain: false };
+            }).filter(Boolean);
             console.log('[PRE-SPLIT] Bypass Gemini, items:', JSON.stringify(items));
             return res.json({ items, source: 'presplit' });
         }
 
-        const safeText = text.replace(/"/g, "'").substring(0, 300);
+        const safeText = normalizedText.replace(/"/g, "'").substring(0, 300);
 
         // ── Prompt avec rôle + few-shot + JSON forcé (conseils NLU) ─────────────
         // Rôle : extracteur logistique, pas assistant conversationnel
@@ -900,7 +1381,7 @@ REGLES CRITIQUES :
 - uncertain:false = affirmation, liste directe, mot seul
 - uncertain:true = question, suggestion, doute ("faudrait", "devrait", "peut-etre", "?")
 - Supprimer les articles (du, de la, des, le, la) dans le champ text
-- Conserver les quantites (3, 300g, un, deux...)
+- Conserver les quantites (3, 300g, un, une, deux...) dans le champ text
 - Ne JAMAIS retourner items vide
 - Extraire UNIQUEMENT le produit/quantite, jamais la phrase entiere
 
@@ -928,7 +1409,7 @@ Reponse JSON:`;
         if (!gRes.ok) {
             const errText = await gRes.text();
             console.error('[GEMINI] Erreur API:', gRes.status, errText.substring(0,100));
-            const simple = _fallbackExtract(text).map(t => ({ text: t, uncertain: false }));
+            const simple = _fallbackExtract(normalizedText).map(t => ({ text: t, uncertain: false }));
             return res.json({ items: simple, source: 'fallback' });
         }
 
@@ -944,23 +1425,83 @@ Reponse JSON:`;
             const parsed = JSON.parse(clean);
             // Accepter {items:[...]} ou directement [...]
             const arr = Array.isArray(parsed) ? parsed : (parsed.items || []);
+            const uniq = new Set();
             items = arr
                 .filter(i => i && typeof i.text === 'string' && i.text.trim().length > 1)
-                .map(i => ({ text: i.text.trim(), uncertain: !!i.uncertain }));
+                .map(i => {
+                    const txt = _cleanExtractedItemText(i.text.trim());
+                    const key = _normalizeProductKey(txt);
+                    if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
+                    uniq.add(key);
+                    return { text: txt, uncertain: !!i.uncertain };
+                })
+                .filter(Boolean);
         } catch(e) {
             console.warn('[GEMINI] JSON parse failed:', e.message, '| raw:', raw.substring(0,80));
-            items = _fallbackExtract(text).map(t => ({ text: t.trim(), uncertain: false }));
+            const uniq = new Set();
+            items = _fallbackExtract(normalizedText).map(t => {
+                const txt = _cleanExtractedItemText(t.trim());
+                const key = _normalizeProductKey(txt);
+                if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
+                uniq.add(key);
+                return { text: txt, uncertain: false };
+            }).filter(Boolean);
         }
 
         // Dernier filet : si toujours vide → fallback
-        if (items.length === 0 && text.trim().length > 1) {
-            const fb = _fallbackExtract(text);
+        if (items.length === 0 && normalizedText.trim().length > 1) {
+            const fb = _fallbackExtract(normalizedText);
+            const uniq = new Set();
             items = fb.length > 0
-                ? fb.map(t => ({ text: t, uncertain: true }))
-                : [{ text: text.trim().substring(0, 60), uncertain: true }];
+                ? fb.map(t => {
+                    const txt = _cleanExtractedItemText(t);
+                    const key = _normalizeProductKey(txt);
+                    if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
+                    uniq.add(key);
+                    return { text: txt, uncertain: true };
+                }).filter(Boolean)
+                : (() => {
+                    const txt = _cleanExtractedItemText(normalizedText.trim().substring(0, 60));
+                    return _isLikelyProductText(txt) ? [{ text: txt, uncertain: true }] : [];
+                })();
         }
 
-        console.log('[GEMINI] ' + items.length + ' items extraits de "' + text.substring(0, 50) + '"');
+        // Post-traitement : si Gemini (ou fallback) a isolé une quantité ("un", "deux", "3")
+        // devant un produit, on les recolle.
+        items = _mergeStandaloneQuantities(items);
+
+        // Si ce n'est PAS une question, on force uncertain=false (évite des "?" parasites)
+        if (!isQuestion) {
+            items = items.map(it => it ? { ...it, uncertain: false } : it).filter(Boolean);
+        }
+
+        // Heuristique spéciale : si l'entrée commence par une quantité et que l'item unique
+        // perd la quantité (ex: "un gigot d'agneau" -> "gigot d'agneau"), on la réinjecte.
+        // Et si quantité > 1 on pluralise "gigot" si besoin.
+        try {
+            const src = String(normalizedText || '').replace(/-+/g, ' ').trim().toLowerCase();
+            const mQty = src.match(/^(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\\d+)\\s+(.+)$/i);
+            if (mQty && items.length === 1 && items[0] && typeof items[0].text === 'string') {
+                const qtyRaw = mQty[1];
+                const rest = (mQty[2] || '').trim();
+                const extracted = items[0].text.trim();
+                // Si l'extrait est exactement le "reste" (ou très proche) sans la quantité, on préfixe.
+                if (rest && extracted && (_normalizeProductKey(rest) === _normalizeProductKey(extracted))) {
+                    let mergedText = `${qtyRaw} ${extracted}`.trim();
+                    const qtyN = (/^\\d+$/.test(qtyRaw) ? parseInt(qtyRaw, 10) : (qtyRaw === 'un' || qtyRaw === 'une') ? 1 : 2);
+                    if (qtyN > 1) {
+                        mergedText = mergedText.replace(/^\\s*(\\w+)\\b/, (w) => {
+                            const lw = w.toLowerCase();
+                            if (lw === 'gigot' && !/gigots\\b/i.test(mergedText)) return 'gigots';
+                            return w;
+                        });
+                    }
+                    items[0] = { ...items[0], text: mergedText, uncertain: false };
+                }
+            }
+        } catch (e) {}
+
+        console.log('[GEMINI] ' + items.length + ' items extraits de "' + normalizedText.substring(0, 50) + '"');
         res.json({ items, source: 'gemini' });
 
     } catch(err) {
@@ -2000,6 +2541,9 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
 
 
 // --- SOCKET.IO ---
+// Map userEmail → socket actif (une seule session par user)
+const _userSockets = new Map();
+
 // Middleware de sécurité pour Socket.io
 io.use((socket, next) => {
     const token = socket.handshake.auth.token; // On récupère le token envoyé par le front
@@ -2015,6 +2559,24 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
+    // ── Session unique par utilisateur ───────────────────────────────────
+    const userEmail = socket.user?.email;
+    if (userEmail) {
+        const prevSocket = _userSockets.get(userEmail);
+        if (prevSocket && prevSocket.id !== socket.id) {
+            console.log('[SOCKET] Session dupliquée détectée pour', userEmail, '— déconnexion du socket précédent:', prevSocket.id);
+            prevSocket.emit('session-replaced', { message: 'Une nouvelle session a été ouverte sur un autre appareil.' });
+            prevSocket.disconnect(true);
+        }
+        _userSockets.set(userEmail, socket);
+        socket.on('disconnect', () => {
+            if (_userSockets.get(userEmail)?.id === socket.id) {
+                _userSockets.delete(userEmail);
+                console.log('[SOCKET] Session fermée pour', userEmail);
+            }
+        });
+    }
+
     socket.on('get-history', async (data) => {
         // Filtrer par groupId, et par postitId si fourni
         const filter = { groupId: data.groupId };
@@ -2072,7 +2634,8 @@ io.on('connection', (socket) => {
 						postitId: data.postitId,
 						senderName: "SYSTÈME",
 						content: `⚠️ ANNULATION : ${data.comment}`,
-						isNote: true // On le met en note pour qu'il soit bien visible
+						// Visible sur e-ink par défaut
+						isNote: false
 					});
 					await newMessage.save();
 					// On informe tout le monde qu'un nouveau message est arrivé

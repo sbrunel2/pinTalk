@@ -1,6 +1,7 @@
 let socket;
 let allMsgs = [];
 let currentUser = null; // Toujours null au démarrage — rempli après login
+const _aiExtractInProgress = new Set(); // Verrou anti-doublon IA par messageId
 let currentGroupId = localStorage.getItem('currentGroupId') || null;
 let currentGroupConfig = null; // { type, isPro, hasRayons, myRole, name }
 
@@ -177,9 +178,150 @@ const _hdrObserver = new ResizeObserver(() => measureHeaderHeight());
 document.addEventListener('DOMContentLoaded', () => {
     const hdr = document.getElementById('fixed-header');
     if (hdr) _hdrObserver.observe(hdr);
+    const langSel = document.getElementById('ai-dict-lang');
+    const local = JSON.parse(localStorage.getItem('user') || '{}');
+    if (langSel) {
+        langSel.value = local.lang || 'fr';
+        langSel.addEventListener('change', () => loadAiDictionaryUI());
+    }
+    loadAiDictionaryUI();
+    _initSelectionMenu();
 });
 
+// ── Menu contextuel sur sélection de texte dans les bulles ──────────────────
+function _initSelectionMenu() {
+    // Créer le menu une seule fois
+    const menu = document.createElement('div');
+    menu.id = 'selection-context-menu';
+    menu.style.cssText = `
+        position:fixed; z-index:9999; display:none;
+        background:#18181b; border:1.5px solid rgba(255,255,255,0.15);
+        border-radius:8px; overflow:hidden;
+        box-shadow:0 4px 16px rgba(0,0,0,0.4);
+        min-width:180px;
+    `;
+    menu.innerHTML = `
+        <button id="smenu-dict"
+            style="display:block;width:100%;padding:11px 14px;background:none;border:none;
+                   color:white;font-size:12px;font-weight:700;text-align:left;cursor:pointer;
+                   border-bottom:1px solid rgba(255,255,255,0.1);">
+            📚 Ajouter au dico PinTalk
+        </button>
+        <button id="smenu-quote"
+            style="display:block;width:100%;padding:11px 14px;background:none;border:none;
+                   color:white;font-size:12px;font-weight:700;text-align:left;cursor:pointer;">
+            ❝ Mettre entre guillemets
+        </button>
+    `;
+    document.body.appendChild(menu);
+
+    let _lastSelection = '';
+
+    const hideMenu = () => { menu.style.display = 'none'; };
+
+    // Afficher le menu après une sélection dans une bulle
+    document.addEventListener('selectionchange', () => {
+        const sel = window.getSelection();
+        const text = sel?.toString().trim();
+        if (!text || text.length < 2) { hideMenu(); return; }
+
+        // Vérifier que la sélection est dans une bulle de chat
+        const node = sel.anchorNode?.parentElement;
+        if (!node?.closest('.msg-bubble')) { hideMenu(); return; }
+
+        _lastSelection = text;
+
+        // Positionner le menu près de la sélection
+        try {
+            const range = sel.getRangeAt(0);
+            const rect  = range.getBoundingClientRect();
+            const menuW = 190;
+            let left = rect.left + rect.width / 2 - menuW / 2;
+            let top  = rect.top - 8;
+            // Garder dans la fenêtre
+            left = Math.max(8, Math.min(left, window.innerWidth - menuW - 8));
+            if (top < 60) top = rect.bottom + 8;
+            menu.style.left    = left + 'px';
+            menu.style.top     = (top - menu.offsetHeight || top - 88) + 'px';
+            menu.style.display = 'block';
+        } catch(e) { hideMenu(); }
+    });
+
+    // Clic en dehors → fermer
+    document.addEventListener('touchstart', (e) => {
+        if (!menu.contains(e.target)) hideMenu();
+    }, { passive: true });
+    document.addEventListener('mousedown', (e) => {
+        if (!menu.contains(e.target)) hideMenu();
+    });
+
+    // Action 1 : ajouter au dictionnaire IA
+    document.getElementById('smenu-dict').addEventListener('click', async () => {
+        const phrase = _lastSelection;
+        hideMenu();
+        window.getSelection()?.removeAllRanges();
+        if (!phrase) return;
+
+        const lang = document.getElementById('ai-dict-lang')?.value
+                  || localStorage.getItem('lang') || 'fr';
+        try {
+            const res = await fetchAuth('/api/ai-dictionary', {
+                method: 'POST',
+                body: JSON.stringify({ phrase, category: '', scope: 'user', lang })
+            });
+            if (res.ok) {
+                // Feedback visuel
+                const toast = document.createElement('div');
+                toast.textContent = '📚 "' + phrase + '" ajouté au dico';
+                toast.style.cssText = `
+                    position:fixed;bottom:90px;left:50%;transform:translateX(-50%);
+                    background:#18181b;color:white;padding:8px 16px;border-radius:20px;
+                    font-size:12px;font-weight:700;z-index:10000;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.3);pointer-events:none;
+                `;
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2500);
+                await loadAiDictionaryUI();
+            } else {
+                const err = await res.text();
+                if (err.includes('duplicate') || err.includes('existe')) {
+                    alert('Cette expression est déjà dans le dictionnaire.');
+                } else {
+                    alert('Erreur : ' + err);
+                }
+            }
+        } catch(e) { alert('Erreur réseau'); }
+    });
+
+    // Action 2 : mettre entre guillemets dans msg-input
+    document.getElementById('smenu-quote').addEventListener('click', () => {
+        const phrase = _lastSelection;
+        hideMenu();
+        window.getSelection()?.removeAllRanges();
+        if (!phrase) return;
+
+        const input = document.getElementById('msg-input');
+        if (!input) return;
+        const quoted = '"' + phrase + '"';
+        // Ajouter après le texte existant (avec espace si besoin)
+        const current = input.value.trim();
+        input.value = current ? current + ' ' + quoted : quoted;
+        input.focus();
+        autoResizeInput(input);
+    });
+}
+
 // ── Profil utilisateur ────────────────────────────────────────
+// ── Debug : affichage bulles IA ──────────────────────────────
+function isDebugAiVisible() {
+    return localStorage.getItem('debugShowAiBubbles') === '1';
+}
+
+function toggleDebugAiBubbles(checked) {
+    localStorage.setItem('debugShowAiBubbles', checked ? '1' : '0');
+    if (typeof refreshView === 'function') refreshView(false);
+}
+
 async function loadProfile() {
     // D'abord remplir avec localStorage (instantané)
     const local = JSON.parse(localStorage.getItem('user') || '{}');
@@ -189,6 +331,10 @@ async function loadProfile() {
     setVal('prof-email',     local.email);
     setVal('prof-phone',     local.phone);
     setVal('prof-lang',      local.lang || 'fr');
+
+    // Synchroniser la case debug
+    const debugCb = document.getElementById('debug-show-ai-bubbles');
+    if (debugCb) debugCb.checked = isDebugAiVisible();
 
     // Puis rafraîchir depuis le serveur
     try {
@@ -226,12 +372,98 @@ async function saveProfile() {
             localStorage.setItem('user', JSON.stringify(user));
             setUserDisplay();
             if (payload.lang && typeof applyLang === 'function') applyLang(payload.lang);
+            const langSel = document.getElementById('ai-dict-lang');
+            if (langSel) langSel.value = payload.lang || 'fr';
+            loadAiDictionaryUI();
             alert(typeof t==='function' ? t('profileSaved') : '✅ Profil enregistré.');
         } else {
             const txt = await res.text();
             alert('Erreur : ' + txt);
         }
     } catch(e) { alert(typeof t==='function' ? t('errorNetwork') : 'Erreur réseau'); }
+}
+
+function _getPreferredDictLang() {
+    const uiLang = document.getElementById('ai-dict-lang')?.value;
+    if (uiLang) return uiLang;
+    const local = JSON.parse(localStorage.getItem('user') || '{}');
+    return local.lang || 'fr';
+}
+
+async function loadAiDictionaryUI() {
+    const box = document.getElementById('ai-dict-list');
+    if (!box) return;
+    const lang = _getPreferredDictLang();
+    box.innerHTML = '<div style="opacity:0.6;">Chargement...</div>';
+    try {
+        const res = await fetchAuth('/api/ai-dictionary?lang=' + encodeURIComponent(lang));
+        if (!res.ok) {
+            box.innerHTML = '<div style="color:#b91c1c;">Erreur de chargement</div>';
+            return;
+        }
+        const data = await res.json().catch(() => ({ items: [] }));
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (!items.length) {
+            box.innerHTML = '<div style="opacity:0.6;">Aucune entrée pour cette langue.</div>';
+            return;
+        }
+        box.innerHTML = items.map((it) => {
+            const cat = it.category ? ` • ${it.category}` : '';
+            const scope = it.scope === 'global' ? 'global' : 'user';
+            return `<div style="display:flex;align-items:center;gap:6px;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(0,0,0,0.06);">
+                <div style="min-width:0;">
+                    <div style="font-weight:900;word-break:break-word;">${it.phrase}</div>
+                    <div style="opacity:0.5;font-size:9px;text-transform:uppercase;">${it.lang || lang} • ${scope}${cat}</div>
+                </div>
+                <button onclick="deleteAiDictionaryEntry('${it._id}')" style="border:1px solid rgba(220,38,38,0.35);background:#fff5f5;color:#b91c1c;font-size:9px;font-weight:900;padding:4px 6px;cursor:pointer;">Suppr.</button>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        box.innerHTML = '<div style="color:#b91c1c;">Erreur réseau</div>';
+    }
+}
+
+async function addAiDictionaryEntry() {
+    const phraseEl = document.getElementById('ai-dict-phrase');
+    const categoryEl = document.getElementById('ai-dict-category');
+    const scopeEl = document.getElementById('ai-dict-scope');
+    const langEl = document.getElementById('ai-dict-lang');
+    const phrase = phraseEl?.value?.trim() || '';
+    if (!phrase) return alert('Entrez une expression composée.');
+
+    const payload = {
+        phrase,
+        category: categoryEl?.value?.trim() || '',
+        scope: scopeEl?.value || 'user',
+        lang: langEl?.value || _getPreferredDictLang()
+    };
+    try {
+        const res = await fetchAuth('/api/ai-dictionary', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+            const msg = await res.text();
+            return alert('Erreur dictionnaire: ' + msg);
+        }
+        if (phraseEl) phraseEl.value = '';
+        if (categoryEl) categoryEl.value = '';
+        await loadAiDictionaryUI();
+    } catch (e) {
+        alert('Erreur réseau');
+    }
+}
+
+async function deleteAiDictionaryEntry(id) {
+    if (!id) return;
+    if (!confirm('Supprimer cette entrée du dictionnaire ?')) return;
+    try {
+        const res = await fetchAuth('/api/ai-dictionary/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (!res.ok) return alert('Suppression refusée.');
+        await loadAiDictionaryUI();
+    } catch (e) {
+        alert('Erreur réseau');
+    }
 }
 
 async function changePassword() {
@@ -1045,11 +1277,12 @@ function handleTouchEnd(e, id) {
     const el = document.getElementById('swipe-' + id);
     if (!el) return;
     el.style.transition = 'transform 0.2s ease';
-    if (diffX > 20) {
+    if (diffX > 30) {
         el.style.transform = 'translateX(44px)';
         showBtn(id, 'del');
-    } else if (diffX < -20) {
-        el.style.transform = 'translateX(-44px)';
+    } else if (diffX < -30) {
+        // Swipe gauche : bulle reste décalée, bouton stylo reste visible
+        el.style.transform = 'translateX(-48px)';
         showBtn(id, 'edit');
     } else {
         el.style.transform = 'translateX(0)';
@@ -1067,8 +1300,18 @@ function resetSwipe(id) {
 async function deleteMessage(id) {
     resetSwipe(id);
     try {
+        const msg = allMsgs.find(m => m._id === id);
         const res = await fetchAuth('/api/messages/' + id, { method: 'DELETE' });
-        if (res.ok) { allMsgs = allMsgs.filter(m => m._id !== id); refreshView(); }
+        if (res.ok) {
+            // Supprimer les notes IA liées AVANT de retirer le message de allMsgs
+            // car _deleteAiNotesForMessage cherche le sourceMsg dans allMsgs
+            if (msg && msg.senderName !== '✨ IA') {
+                await _deleteAiNotesForMessage(id, msg.postitId);
+            }
+            // Retirer le message user APRÈS la suppression des notes IA
+            allMsgs = allMsgs.filter(m => m._id !== id);
+            refreshView();
+        }
     } catch (err) { console.error(err); }
 }
 
@@ -1082,28 +1325,33 @@ function editMessage(id) {
 
     window._editingMessageId = id;
     const originalText = msg.content;
-    textSpan.contentEditable = 'true';
-    textSpan.style.background = '#ffffff';
-    textSpan.style.color = '#000000';
-    textSpan.style.outline = '2px solid #18181b';
-    textSpan.style.padding = '1px 3px';
-    textSpan.focus();
-    const range = document.createRange();
-    range.selectNodeContents(textSpan);
-    range.collapse(false);
-    window.getSelection().removeAllRanges();
-    window.getSelection().addRange(range);
+
+    // Remplacer le span par un <input> natif — seule façon fiable d'avoir
+    // le focus + clavier + curseur immédiat sur iOS/Android
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = originalText;
+    input.style.cssText = `
+        width:100%; box-sizing:border-box;
+        background:#ffffff; color:#000000;
+        border:none; outline:2px solid #18181b;
+        padding:2px 4px; font-size:inherit;
+        font-family:inherit; font-weight:inherit;
+        border-radius:2px; min-width:80px;
+    `;
+
+    const restore = (newText) => {
+        textSpan.innerText = newText;
+        textSpan.style.display = '';
+        if (input.parentNode) input.parentNode.removeChild(input);
+        window._editingMessageId = null;
+    };
 
     const save = async () => {
         if (window._editingMessageId !== id) return;
-        window._editingMessageId = null;
-        const newText = textSpan.innerText.trim();
-        textSpan.contentEditable = 'false';
-        textSpan.style.background = '';
-        textSpan.style.color = '';
-        textSpan.style.outline = '';
-        textSpan.style.padding = '';
-        if (!newText || newText === originalText) { textSpan.innerText = originalText; return; }
+        const newText = input.value.trim();
+        restore(newText || originalText);
+        if (!newText || newText === originalText) return;
         try {
             const res = await fetchAuth('/api/messages/' + id, {
                 method: 'PATCH',
@@ -1111,22 +1359,31 @@ function editMessage(id) {
             });
             if (res.ok) {
                 msg.content = newText;
-                // Ré-analyser avec l'IA : supprimer les anciennes notes IA liées
-                // puis recréer depuis le nouveau texte
                 const pid = msg.postitId;
-                if (pid && !msg.isNote) {
+                if (pid && msg.senderName !== '✨ IA' && msg.isNote === false) {
                     await _deleteAiNotesForMessage(id, pid);
-                    setTimeout(() => aiAutoExtract(newText, pid), 200);
+                    setTimeout(() => aiAutoExtract(newText, pid, id), 200);
                 }
-            }
-            else { textSpan.innerText = originalText; }
-        } catch (err) { console.error(err); textSpan.innerText = originalText; }
+            } else { msg.content = originalText; }
+        } catch (err) { console.error(err); }
     };
-    textSpan.onkeydown = (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); save(); }
-        if (e.key === 'Escape') { window._editingMessageId = null; textSpan.contentEditable = 'false'; textSpan.style.background = ''; textSpan.style.color = ''; textSpan.style.outline = ''; textSpan.innerText = originalText; }
-    };
-    textSpan.onblur = save;
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { restore(originalText); }
+    });
+    input.addEventListener('blur', save);
+
+    // Masquer le span, insérer l'input à sa place
+    textSpan.style.display = 'none';
+    textSpan.parentNode.insertBefore(input, textSpan);
+
+    // Focus immédiat + curseur en fin de valeur — fonctionne sur iOS/Android
+    setTimeout(() => {
+        input.focus();
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+    }, 50);
 }
 
 // Vibration centralisée (Android uniquement - iOS ne supporte pas navigator.vibrate)
@@ -1316,14 +1573,34 @@ async function initApp() {
         } catch(e) {}
     }
 
+    // Guard : détruire tout socket précédent pour éviter les listeners en doublon
+    if (socket) {
+        try { socket.removeAllListeners(); socket.disconnect(); } catch(e) {}
+        socket = null;
+    }
     socket = io({
-        auth: {
-            token: localStorage.getItem('token') 
-        }
+        auth: { token: localStorage.getItem('token') },
+        forceNew: true
     });
     
     socket.on('new-message', m => { 
         allMsgs.unshift(m); 
+        // Par défaut, l'envoi d'un message texte (non masqué) déclenche l'analyse IA,
+        // et donc l'alimentation de la zone e-ink.
+        try {
+            const isMine = !!(currentUser && m.senderName === currentUser.name);
+            const isText = (!m.type || m.type === 'text');
+            const isUserMsg = (m.senderName !== '✨ IA');
+            const hiddenFromEink = (m.isNote === true);
+            if (isMine && isText && isUserMsg && !hiddenFromEink && m.postitId) {
+                const alreadyHasAi = allMsgs.some(x =>
+                    x.senderName === '✨ IA' &&
+                    x.postitId === m.postitId &&
+                    x.sourceMessageId === m._id
+                );
+                if (!alreadyHasAi) setTimeout(() => aiAutoExtract(m.content || '', m.postitId, m._id), 120);
+            }
+        } catch(e) {}
         refreshView(true); 
     });
     
@@ -1340,7 +1617,23 @@ async function initApp() {
         if (msg) { msg.content = data.newContent; refreshView(false); }
     });
     socket.on('message-deleted', (id) => {
-        allMsgs = allMsgs.filter(m => m._id !== id);
+        const deleted = allMsgs.find(m => m._id === id);
+        const isAiNote = deleted?.senderName === '✨ IA';
+
+        // Retirer le message de allMsgs
+        // Si c'est un message user : retirer aussi ses notes IA liées (orphelines)
+        allMsgs = allMsgs.filter(m => {
+            if (m._id === id) return false;
+            if (!isAiNote && m.senderName === '✨ IA' && m.sourceMessageId === id) return false;
+            return true;
+        });
+
+        // Appeler _deleteAiNotesForMessage UNIQUEMENT pour les messages user
+        // (pas pour les notes IA — évite la récursion et les doublons)
+        if (deleted && !isAiNote) {
+            _deleteAiNotesForMessage(id, deleted.postitId).catch(() => {});
+        }
+
         refreshView(false);
     });
 	socket.on('line-checked-updated', (data) => {
@@ -1359,6 +1652,21 @@ async function initApp() {
 			refreshView(false);
 		}
 	});
+
+    // Session remplacée par un autre appareil
+    socket.on('session-replaced', () => {
+        socket.removeAllListeners();
+        socket.disconnect();
+        alert('\u26a0\ufe0f Votre session a été reprise sur un autre appareil. Reconnectez-vous.');
+        const vp   = document.getElementById('viewport');
+        const hdr  = document.querySelector('.fixed-header');
+        const tabs = document.querySelector('.tab-bar');
+        const auth = document.getElementById('auth-screen');
+        if (vp)   vp.style.display   = 'none';
+        if (hdr)  hdr.style.display  = 'none';
+        if (tabs) tabs.style.display = 'none';
+        if (auth) { auth.style.display = 'flex'; auth.classList.remove('hidden'); }
+    });
     applyHeaderState();
     setUserDisplay();
     initSkin();
@@ -2202,7 +2510,7 @@ function renderPostitTabs(postits, selectedId) {
     const myRole = cfg.myRole || 'owner';
     const isOwnerOrAdmin = myRole === 'owner' || myRole === 'admin';
     const isEmployee = myRole === 'employe';
-    const canCreate = !isEmployee && _cachedPostits.length < (isPro ? 4 : 4);
+    const canCreate = (myRole === 'owner') && _cachedPostits.length < 4;
 
     const tabs = _cachedPostits.map(p => {
         const isActive = p._id === selectedId;
@@ -2274,7 +2582,29 @@ function renderPostitTabs(postits, selectedId) {
            </div>`
         : '';
 
-    if (wrap) wrap.innerHTML = tabs + addTab;
+    // Bouton retour groupe — style onglet surélevé (option A)
+    const groupName = (currentGroupConfig?.name || '').toUpperCase();
+    const shortName = groupName.length > 12 ? groupName.substring(0, 12) + '…' : groupName;
+    const backBtn = `<div onclick="goToPage(PAGE_GROUPES)"
+            style="flex-shrink:0;display:flex;flex-direction:column;align-items:center;
+                   justify-content:center;padding:4px 10px;gap:2px;cursor:pointer;
+                   min-width:54px;max-width:66px;min-height:44px;align-self:stretch;
+                   background:rgba(255,255,255,0.15);
+                   border-top:3px solid var(--accent);
+                   border-right:1px solid rgba(255,255,255,0.18);
+                   border-radius:6px 0 0 0;
+                   touch-action:manipulation;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+                 style="pointer-events:none;">
+                <polyline points="15 18 9 12 15 6"/>
+            </svg>
+            <span style="font-size:7px;font-weight:900;text-transform:uppercase;
+                         letter-spacing:0.3px;text-align:center;line-height:1.25;
+                         word-break:break-word;opacity:0.85;max-width:58px;
+                         pointer-events:none;">${shortName}</span>
+        </div>`;
+    if (wrap) wrap.innerHTML = backBtn + tabs + addTab;
     if (hiddenWrap) hiddenWrap.innerHTML = '';
 
     // Activer/désactiver la zone de message selon si un pintalk est sélectionné
@@ -2942,8 +3272,31 @@ async function updateFilterDateFromPostit() {
 }
 
 
-function toggleNote(messageId) {
+async function toggleNote(messageId) {
+    const msg = allMsgs.find(m => m._id === messageId);
+    if (!msg || msg.senderName === '✨ IA') return;
+    const willHideFromEink = !msg.isNote;
+
+    // Mise à jour locale immédiate
+    msg.isNote = willHideFromEink;
     socket.emit('toggle-message-note', { messageId });
+    refreshView(false);
+
+    if (willHideFromEink) {
+        // Masquer : supprimer les items IA liés
+        await _deleteAiNotesForMessage(messageId, msg.postitId);
+        refreshView(false);
+    } else {
+        // Ré-afficher : le message user est déjà visible dans l'e-ink
+        // grâce au filtre userItemsWithoutAi. On relance l'extraction IA
+        // seulement si pas déjà en cours — APRÈS avoir supprimé les anciens items
+        if (msg.postitId && !_aiExtractInProgress.has(msg._id)) {
+            await _deleteAiNotesForMessage(messageId, msg.postitId);
+            refreshView(false); // affiche le message user en attendant l'IA
+            _aiExtractInProgress.add(msg._id);
+            setTimeout(() => aiAutoExtract(msg.content || '', msg.postitId, msg._id), 100);
+        }
+    }
 }
 
 function toggleLineCheck(messageId) {
@@ -2971,7 +3324,7 @@ function toggleLineCheck(messageId) {
     // Chat = messages normaux uniquement (pas les notes IA)
     const lines = allMsgs.filter(m =>
         m.postitId === pid &&
-        !(m.isNote && m.senderName === '✨ IA')
+        m.senderName !== '✨ IA'
     );
     const checkedCount = lines.filter(m => m.checked).length;
     const totalLines = lines.length;
@@ -3143,21 +3496,45 @@ async function refreshView(forceScrollBottom = false) {
         } catch (e) { console.error(e); }
     }
 
-    // Zone contenu pintalk = uniquement les notes extraites par l'IA (isNote=true)
-    // Les messages normaux de conversation restent dans le chat uniquement
-    const forEink = allMsgs.filter(m =>
-        m.postitId === pid &&
-        m.isNote === true &&
-        m.senderName === '✨ IA' &&
-        m.type !== 'image'
+    // Zone e-ink = uniquement :
+    // - les items IA (produits) liés à des messages NON masqués
+    // - les morceaux de texte entre guillemets (", «», “” …) extraits des messages NON masqués
+    // On n'affiche ni auteur, ni texte complet non-produit.
+    const hiddenSourceIds = new Set(
+        allMsgs
+            .filter(m => m.postitId === pid && m.senderName !== '✨ IA' && m.isNote === true)
+            .map(m => m._id)
     );
-    const einkHtml = forEink.map(m => {
-        const isLocked   = (currentStatus === "Annulé" || currentStatus === "En caisse");
+
+    // Items IA visibles (produits extraits par l'IA)
+    const aiItems = allMsgs.filter(m => {
+        if (m.postitId !== pid) return false;
+        if (m.senderName !== '✨ IA') return false;
+        if (m.type === 'image' || m.type === 'audio') return false;
+        if (m.isNote === true) return false;
+        if (m.sourceMessageId) return !hiddenSourceIds.has(m.sourceMessageId);
+        return true;
+    });
+
+    // IDs des messages source qui ont déjà des items IA associés
+    const sourcesWithAi = new Set(aiItems.map(m => m.sourceMessageId).filter(Boolean));
+
+    // Messages user visibles SANS item IA lié → affichés directement dans l'e-ink
+    const userItemsWithoutAi = allMsgs.filter(m => {
+        if (m.postitId !== pid) return false;
+        if (m.senderName === '✨ IA') return false;
+        if (m.type === 'image' || m.type === 'audio') return false;
+        if (m.isNote === true) return false;
+        if (sourcesWithAi.has(m._id)) return false; // déjà représenté par ses items IA
+        return true;
+    });
+
+    const einkHtml = [...aiItems, ...userItemsWithoutAi].map(m => {
+        const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");
+
+        // Résultat IA: checkbox + style incertain/checked
         const uncertain  = !!m.isUncertain;
         const opacityClass = isLocked ? "opacity-50 cursor-not-allowed" : "cursor-pointer";
-
-        // Items certains ET incertains ont une case à cocher
-        // Incertain = couleur orange + préfixe ?
         const borderCol = uncertain ? '#d97706' : '#000';
         const boxClass  = m.checked ? "bg-green-500 text-white" : "bg-white text-transparent";
         const textColor = m.checked ? '#a1a1aa' : (uncertain ? '#d97706' : '#000');
@@ -3217,9 +3594,16 @@ async function refreshView(forceScrollBottom = false) {
     if (orderInfoEl && prepHeaderHtml) orderInfoEl.innerHTML = prepHeaderHtml;
 
     if (chat) {
-        const filtered = allMsgs.filter(m => m.postitId === pid);
+        const showAiDebug = isDebugAiVisible();
+        const filtered = allMsgs.filter(m => {
+            if (m.postitId !== pid) return false;
+            // Masquer les bulles d'analyse IA sauf si le mode debug est actif
+            if (m.senderName === '✨ IA' && !showAiDebug) return false;
+            return true;
+        });
         chat.innerHTML = [...filtered].reverse().map(m => {
             const isMe = (currentUser && m.senderName === currentUser.name);
+            // isNote=true => masqué du e-ink => grisé dans le chat
             const noteClass = m.isNote ? "opacity-30 italic" : "";
             // Couleur par auteur : hue dérivé du nom
             let bubbleBgStyle, tagBg, tagColor, bubbleTextColor;
@@ -3285,21 +3669,28 @@ async function refreshView(forceScrollBottom = false) {
 
                     ${isMe ? `<button id="edit-${m._id}"
                             ontouchend="event.stopPropagation(); editMessage('${m._id}')"
-                            style="position:absolute; top:0; bottom:0; left:100%;
-                                   width:44px; background:transparent;
+                            style="position:absolute; top:0; bottom:0; right:-48px;
+                                   width:44px; background:rgba(30,30,30,0.85);
+                                   border-radius:0 8px 8px 0;
                                    border:none; font-size:22px; cursor:pointer;
                                    display:flex; align-items:center; justify-content:center;
                                    opacity:0; pointer-events:none;
-                                   transition:opacity 0.2s;">🖍️</button>` : ''}
+                                   transition:opacity 0.2s;
+                                   touch-action:manipulation;">🖍️</button>` : ''}
 
                     <div style="display:flex; align-items:flex-start; gap:6px;">
                         <span class="msg-author-tag" style="flex-shrink:0;${tagStyle}">${isMe ? (typeof t==='function'?t('me'):'Moi') : m.senderName}</span>
                         ${contentHtml}
-                        <button ontouchend="event.stopPropagation(); toggleNote('${m._id}')"
-                                onclick="event.stopPropagation(); toggleNote('${m._id}')"
-                                style="flex-shrink:0; font-size:16px; background:none; border:none; cursor:pointer;
-                                       padding:4px 6px; margin:-4px -2px; touch-action:manipulation;">
-                            ${m.isNote ? '🚫' : '👁️'}</button>
+                        ${m.senderName === '✨ IA' ? '' : `<button
+                                ontouchstart="event.stopPropagation();"
+                                ontouchend="event.stopPropagation(); event.preventDefault(); toggleNote('${m._id}');"
+                                onclick="event.stopPropagation(); event.preventDefault();"
+                                style="flex-shrink:0; font-size:18px; background:none; border:none; cursor:pointer;
+                                       padding:8px 10px; margin:-8px -6px;
+                                       min-width:44px; min-height:44px;
+                                       display:inline-flex; align-items:center; justify-content:center;
+                                       touch-action:manipulation; -webkit-tap-highlight-color:transparent;">
+                            ${m.isNote ? '🚫' : '👁️'}</button>`}
 
                     </div>
                 </div>
@@ -3423,7 +3814,7 @@ async function refreshView(forceScrollBottom = false) {
     }
 
     // --- E-INK SIMULATION (Articles uniquement, on ignore les images ici) ---
-    const forEink = allMsgs.filter(m => m.postitId === pid && !m.isNote && m.type !== 'image');
+    const forEink = allMsgs.filter(m => m.postitId === pid && !m.isNote && m.type !== 'image' && m.senderName !== '✨ IA');
 	const einkHtml = forEink.map(m => {
 		// On ne verrouille PAS si c'est "Terminé", seulement si c'est payé ou annulé
 		const isLocked = (currentStatus === "Annulé" || currentStatus === "En caisse");		
@@ -3452,7 +3843,12 @@ async function refreshView(forceScrollBottom = false) {
     if (prepHeader) prepHeader.innerHTML = prepHeaderHtml;
 
     if (chat) {
-        const filtered = allMsgs.filter(m => m.postitId === pid);
+        const showAiDebug = isDebugAiVisible();
+        const filtered = allMsgs.filter(m => {
+            if (m.postitId !== pid) return false;
+            if (m.senderName === '✨ IA' && !showAiDebug) return false;
+            return true;
+        });
         chat.innerHTML = [...filtered].reverse().map(m => {
             const isMe = (currentUser && m.senderName === currentUser.name);
             const noteClass = m.isNote ? "opacity-30 italic" : "";
@@ -3477,7 +3873,16 @@ async function refreshView(forceScrollBottom = false) {
                     <div class="flex items-center gap-2">
                         <span class="text-[8px] font-black px-1.5 py-0.5 uppercase flex-shrink-0 ${tagStyle}">${isMe ? 'Moi' : m.senderName}</span>
                         ${contentHtml}
-                        <button onclick="toggleNote('${m._id}')" class="ml-1 flex-shrink-0 text-[14px] cursor-pointer grayscale">${m.isNote ? '🚫' : '👁️'}</button>
+                        <button
+                                ontouchstart="event.stopPropagation();"
+                                ontouchend="event.stopPropagation(); event.preventDefault(); toggleNote('${m._id}');"
+                                onclick="event.stopPropagation(); event.preventDefault();"
+                                class="ml-1 flex-shrink-0 cursor-pointer grayscale"
+                                style="font-size:16px; background:none; border:none;
+                                       padding:6px 8px; min-width:40px; min-height:40px;
+                                       display:inline-flex; align-items:center; justify-content:center;
+                                       touch-action:manipulation; -webkit-tap-highlight-color:transparent;">
+                            ${m.isNote ? '🚫' : '👁️'}</button>
                     </div>
                 </div>
             </div>`;
@@ -3805,11 +4210,10 @@ async function _uploadAudio() {
         const transcribed = _speechTranscript.trim();
         _speechTranscript = '';
         _audioChunks = [];
-        // Envoyer le texte transcrit comme message normal
+        // Vider la zone de saisie après envoi vocal
+        const inputEl = document.getElementById('msg-input');
+        if (inputEl) { inputEl.value = ''; autoResizeInput(inputEl); }
         _sendTextMessage(transcribed);
-        // Extraction IA automatique comme pour les messages écrits
-        const pid = currentPostitId || document.getElementById('sel-pos')?.value;
-        if (pid) setTimeout(() => aiAutoExtract(transcribed, pid), 300);
         return;
     }
 
@@ -3865,26 +4269,27 @@ function _sendTextMessage(text) {
 // Extrait PLUSIEURS items et les ajoute ligne par ligne dans le pintalk
 // Supprimer les notes IA liées à un message source (avant ré-analyse)
 async function _deleteAiNotesForMessage(sourceMessageId, postitId) {
-    const sourceMsg = allMsgs.find(m => m._id === sourceMessageId);
-    if (!sourceMsg) return;
-
     // Priorité 1 : supprimer les notes liées par sourceMessageId exact
+    // Ne dépend plus de sourceMsg dans allMsgs — fonctionne même si le parent
+    // a déjà été retiré de allMsgs par le handler socket message-deleted
     let aiNotes = allMsgs.filter(m =>
-        m.postitId === postitId &&
-        m.isNote &&
         m.senderName === '✨ IA' &&
-        m.sourceMessageId === sourceMessageId
+        m.sourceMessageId === sourceMessageId &&
+        (!postitId || m.postitId === postitId)
     );
 
-    // Priorité 2 : si aucune note liée, fenêtre temporelle étroite (10s)
-    if (!aiNotes.length) {
-        const sourceTime = new Date(sourceMsg.date).getTime();
-        aiNotes = allMsgs.filter(m =>
-            m.postitId === postitId &&
-            m.isNote &&
-            m.senderName === '✨ IA' &&
-            Math.abs(new Date(m.date).getTime() - sourceTime) < 10000
-        );
+    // Priorité 2 : si aucune note liée par ID, chercher par postitId seul
+    // (cas des vieux messages sans sourceMessageId renseigné)
+    if (!aiNotes.length && postitId) {
+        const sourceMsg = allMsgs.find(m => m._id === sourceMessageId);
+        if (sourceMsg) {
+            const sourceTime = new Date(sourceMsg.date).getTime();
+            aiNotes = allMsgs.filter(m =>
+                m.postitId === postitId &&
+                m.senderName === '✨ IA' &&
+                Math.abs(new Date(m.date).getTime() - sourceTime) < 10000
+            );
+        }
     }
 
     for (const note of aiNotes) {
@@ -3897,49 +4302,363 @@ async function _deleteAiNotesForMessage(sourceMessageId, postitId) {
 
 let _currentSourceMsgId = null; // ID du message source en cours d'analyse
 
+// Expressions composées connues qui sont parfois mal découpées en énumération.
+const _aiProtectedCompounds = [
+    { regex: /\bsacs?\s+poubelle(s)?\b/gi, toHyphen: true },
+    { regex: /\bsacs?\s+en\s+plastique\b/gi, toHyphen: true },
+    { regex: /\bpommes?\s+de\s+terre\b/gi, toHyphen: true },
+    // Boucherie / pièces de viande (variantes fréquentes)
+    { regex: /\bgigot\s+d['’]\s*agneau\b/gi, toHyphen: true },
+    { regex: /\b(?:c[oô]te|c[oô]tes)\s+de\s+b[oœ]uf\b/gi, toHyphen: true },
+    { regex: /\b(?:c[oô]te|c[oô]tes)\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\b(?:escalope|escaloppes?|escalopes?)\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bfilet\s+de\s+b[oœ]uf\b/gi, toHyphen: true },
+    { regex: /\bfilet\s+mignon\b/gi, toHyphen: true },
+    { regex: /\bblanquette\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bbourguignon\s+de\s+b[oœ]uf\b/gi, toHyphen: true },
+    { regex: /\bjarret\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bjarret\s+d['’]\s*agneau\b/gi, toHyphen: true },
+    { regex: /\bpoitrine\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bpoitrine\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\bepaule\s+d['’]\s*agneau\b/gi, toHyphen: true },
+    { regex: /\b[eé]paule\s+d['’]\s*agneau\b/gi, toHyphen: true },
+    { regex: /\bepaule\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\b[eé]paule\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\broti\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\br[oô]ti\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\br[oô]ti\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\br[oô]ti\s+de\s+b[oœ]uf\b/gi, toHyphen: true },
+    { regex: /\bsteak\s+hach[eé]\b/gi, toHyphen: true },
+    { regex: /\bviande\s+hach[eé]e?\b/gi, toHyphen: true },
+    { regex: /\bsaucisse\s+de\s+toulouse\b/gi, toHyphen: true },
+    { regex: /\bboudin\s+noir\b/gi, toHyphen: true },
+    { regex: /\bboudin\s+blanc\b/gi, toHyphen: true },
+    { regex: /\bcotelette(s)?\s+d['’]\s*agneau\b/gi, toHyphen: true },
+    { regex: /\bc[oô]telette(s)?\s+d['’]\s*agneau\b/gi, toHyphen: true },
+    { regex: /\bcotelette(s)?\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\bc[oô]telette(s)?\s+de\s+porc\b/gi, toHyphen: true },
+    { regex: /\bfoie\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\brognons?\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bris\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bqueue\s+de\s+b[oœ]uf\b/gi, toHyphen: true },
+    { regex: /\bpied(?:s)?\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bt[êe]te\s+de\s+veau\b/gi, toHyphen: true },
+    { regex: /\bpapier\s+toilette\b/gi, toHyphen: true },
+    { regex: /\bpapier\s+essuie[-\s]?tout\b/gi, toHyphen: true },
+    { regex: /\bhuile\s+d['’]\s*olive\b/gi, toHyphen: true },
+    { regex: /\blait\s+de\s+coco\b/gi, toHyphen: true },
+    { regex: /\bbeurre\s+de\s+cacahu[eè]te(s)?\b/gi, toHyphen: true },
+    { regex: /\bcr[eè]me\s+fra[iî]che\b/gi, toHyphen: true },
+    { regex: /\bjus\s+d['’]\s*orange\b/gi, toHyphen: true },
+    { regex: /\bcoulis\s+de\s+tomate\b/gi, toHyphen: true },
+    { regex: /\bvin\s+blanc\b/gi, toHyphen: true },
+    { regex: /\bvin\s+rouge\b/gi, toHyphen: true },
+    { regex: /\bth[eé]\s+vert\b/gi, toHyphen: true },
+    { regex: /\bchocolat\s+en\s+poudre\b/gi, toHyphen: true },
+    { regex: /\bfarine\s+de\s+bl[eé]\b/gi, toHyphen: true },
+    { regex: /\bpomme(s)?\s+de\s+pin\b/gi, toHyphen: true }
+];
+
+// Dictionnaire extensible de produits composés usuels (multi-domaines).
+// On convertit automatiquement les espaces en séparateurs souples espace/tiret.
+const _aiProtectedCompoundPhrases = [
+    // Epicerie / supermarche
+    'riz basmati', 'riz complet', 'pates fraiches', 'pates completes', 'sauce tomate',
+    'concentre de tomate', 'puree de tomate', 'huile de tournesol', 'huile de colza',
+    'huile de sesame', 'vinaigre balsamique', 'vinaigre de cidre', 'moutarde de dijon',
+    'sel fin', 'gros sel', 'sucre glace', 'sucre roux', 'sucre vanille',
+    'levure chimique', 'levure de boulanger', 'lait concentre', 'lait ecreme',
+    'lait demi ecreme', 'lait entier', 'creme liquide', 'creme epaisse',
+    'fromage blanc', 'yaourt nature', 'yaourt grec', 'oeufs frais',
+    'haricots verts', 'petits pois', 'pois chiches', 'lentilles vertes',
+    'lentilles corail', 'mais doux', 'ble tendre', 'semoule fine',
+    'chapelure fine', 'cafe moulu', 'cafe en grain', 'the noir',
+    'the earl grey', 'chocolat noir', 'chocolat au lait', 'chocolat blanc',
+    'papier cuisson', 'film alimentaire', 'aluminium menager', 'sac congelation',
+    'eau minerale', 'eau gazeuse', 'jus de pomme', 'jus multi fruits',
+    'sirop de grenadine', 'beurre sale', 'beurre doux',
+
+    // Fruits / legumes
+    'pommes golden', 'pommes granny', 'pommes gala', 'poires conference',
+    'bananes plantain', 'tomates cerise', 'oignons rouges', 'oignons blancs',
+    'salade verte', 'chou fleur', 'chou rouge', 'chou blanc',
+    'haricots plats', 'patates douces', 'courgettes rondes', 'poivrons rouges',
+    'poivrons verts', 'poivrons jaunes', 'champignons de paris',
+
+    // Boucherie / charcuterie
+    'souris d agneau', 'carre d agneau', 'noix de veau', 'osso buco',
+    'basse cote', 'faux filet', 'entrecote de boeuf', 'paleron de boeuf',
+    'macreuse de boeuf', 'hampe de boeuf', 'onglet de boeuf',
+    'araignee de boeuf', 'travers de porc', 'filet de porc', 'echine de porc',
+    'jambon blanc', 'jambon cru', 'jambon de pays', 'lardons fumes',
+    'lardons nature', 'poitrine fumee', 'saucisson sec', 'chorizo doux',
+    'chorizo fort', 'andouille de guemene', 'pate de campagne',
+
+    // Poissonnerie
+    'saumon fume', 'saumon frais', 'truite fumee', 'cabillaud frais',
+    'dos de cabillaud', 'filet de saumon', 'filet de merlu',
+    'thon rouge', 'thon blanc', 'bar de ligne', 'dorade royale',
+    'lieu noir', 'lieu jaune', 'colin d alaska', 'crevettes roses',
+    'crevettes grises', 'moules mariniere', 'huitres fines',
+    'coquilles saint jacques', 'surimi batonnet',
+
+    // Fromagerie / cremerie
+    'fromage de chevre', 'buche de chevre', 'camembert de normandie',
+    'brie de meaux', 'comte vieux', 'emmental rape', 'mozzarella di bufala',
+    'parmesan rape', 'gruyere rape', 'raclette nature', 'raclette fumee',
+    'bleu d auvergne',
+
+    // Boulangerie
+    'pain de mie', 'pain complet', 'pain aux cereales', 'baguette tradition',
+    'farine de seigle', 'farine complete', 'sucre en poudre',
+
+    // Hygiene / entretien
+    'gel douche', 'savon de marseille', 'dentifrice blancheur',
+    'brosse a dents', 'papier toilette double epaisseur',
+    'essuie tout', 'liquide vaisselle', 'lessive liquide', 'adoucissant linge',
+    'eponge grattante', 'nettoyant multi usages', 'desinfectant menager',
+    'sacs aspirateur',
+
+    // Bricolage
+    'papier de verre', 'laine de roche', 'laine de verre',
+    'enduit de rebouchage', 'enduit de lissage', 'peinture acrylique',
+    'peinture glycero', 'ruban adhesif', 'ruban de masquage',
+    'colle a bois', 'colle neoprene', 'colle forte', 'vis a bois',
+    'vis a placo', 'chevilles molly', 'chevilles a frapper',
+    'boulons acier', 'ecrous frein', 'rondelles plates',
+    'joint silicone', 'mastic acrylique', 'plaque de platre',
+    'tube pvc', 'gaine electrique', 'prise murale', 'interrupteur va et vient',
+    'ampoule led', 'batterie perceuse',
+
+    // Automobile
+    'huile moteur', 'liquide de frein', 'liquide de refroidissement',
+    'lave glace', 'balais essuie glace', 'filtre a air',
+    'filtre a huile', 'filtre habitacle', 'bougies d allumage',
+    'plaquettes de frein', 'disques de frein', 'ampoule h7',
+    'ampoule h4', 'batterie voiture', 'chargeur batterie',
+    'cables de demarrage', 'pneu hiver', 'pneu ete', 'pneu 4 saisons',
+    'chaine a neige', 'triangle de signalisation', 'gilet jaune',
+    'nettoyant jantes', 'shampoing voiture', 'microfibre auto'
+];
+
+function _escapeRegexLiteral(text) {
+    return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function _compileProtectedPhraseRegex(phrase) {
+    let pattern = _escapeRegexLiteral((phrase || '').trim().toLowerCase());
+    pattern = pattern.replace(/\\'/g, "['’]");
+    pattern = pattern.replace(/\s+/g, '[\\s-]+');
+    return new RegExp(`\\b${pattern}\\b`, 'gi');
+}
+
+for (const phrase of _aiProtectedCompoundPhrases) {
+    _aiProtectedCompounds.push({
+        regex: _compileProtectedPhraseRegex(phrase),
+        toHyphen: true
+    });
+}
+
+function _normalizeAiInputText(text) {
+    // La normalisation principale est désormais gérée côté serveur
+    // via le dictionnaire Mongo (+ cache mémoire).
+    // On conserve ce point d'entrée côté client pour compatibilité.
+    return text || '';
+}
+
+function _extractQuotedItems(text) {
+    const items = [];
+    if (!text) return { cleanedText: '', quotedItems: items };
+
+    let cleanedText = String(text);
+    const patterns = [
+        /"([^"]+)"/g,       // guillemets droits
+        /«\s*([^»]+?)\s*»/g, // guillemets francais
+        /“([^”]+)”/g,       // guillemets typographiques
+        /„([^“]+)“/g,       // variantes (de -> “)
+        /”([^“]+)“/g,       // inversés
+        /‘([^’]+)’/g,       // quotes simples typographiques
+        /‚([^‘]+)‘/g        // variantes
+    ];
+
+    for (const pattern of patterns) {
+        cleanedText = cleanedText.replace(pattern, (_, raw) => {
+            const value = (raw || '').trim();
+            if (value) items.push(value);
+            return ' ';
+        });
+    }
+
+    cleanedText = cleanedText.replace(/\s{2,}/g, ' ').trim();
+
+    return { cleanedText, quotedItems: items };
+}
+
+function _normalizeExtractedItemKey(text) {
+    return String(text || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[’']/g, ' ')
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .replace(/^(du|de la|de l|des|de|le|la|les|un|une)\s+/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function _isNegativeConfirmationMessage(text) {
+    const t = String(text || '').toLowerCase().trim();
+    if (!t) return false;
+    // Si le message contient aussi une confirmation positive ("oui"), on ne traite
+    // pas ça comme un "tout négatif" : on gère alors la négation item-par-item.
+    if (/\boui\b/.test(t)) return false;
+    if (/^(non|no)\b/.test(t)) return true;
+    if (/\bpas\s+(du|de|d'|des|le|la|les|un|une)\b/.test(t)) return true;
+    if (/\b(ne|n')\s+.*\s+pas\b/.test(t)) return true;
+    if (/\b(plus|jamais)\b/.test(t) && /\b(prendre|acheter|mettre|ajouter)\b/.test(t)) return true;
+    return false;
+}
+
+function _isQuestionLikeMessage(text) {
+    const t = String(text || '').toLowerCase();
+    if (!t.trim()) return false;
+    if (t.includes('?')) return true;
+    if (/\best[\s-]*ce\s+que\b/.test(t)) return true;
+    if (/\bon\s+a\s+besoin\b/.test(t)) return true;
+    if (/\bbesoin\s+de\b/.test(t)) return true;
+    if (/\bil\s+nous\s+faut\b/.test(t)) return false;
+    if (/\bil\s+faudrait\b/.test(t)) return false;
+    return false;
+}
+
+function _isNegatedItemInText(text, itemText) {
+    const src = String(text || '').toLowerCase();
+    const it = String(itemText || '').trim();
+    if (!src || !it) return false;
+    // match "non (pas) de <item>" / "pas de <item>" / "non <item>"
+    let itemPattern = _escapeRegexLiteral(it.toLowerCase());
+    itemPattern = itemPattern.replace(/\\'/g, "['’]");
+    itemPattern = itemPattern.replace(/\s+/g, '[\\s-]+');
+    const re = new RegExp(`\\b(?:non\\s+pas|pas|non)\\s+(?:de\\s+|d['’]\\s*)?${itemPattern}\\b`, 'i');
+    return re.test(src);
+}
+
 async function aiAutoExtract(text, postitId, sourceMessageId) {
     // Seuil minimal : 2 caractères et un pintalk cible
     if (!text || text.trim().length < 2 || !postitId) return;
     _currentSourceMsgId = sourceMessageId || null;
     // SUPPRIMÉ : le filtre "moins de 3 mots" bloquait "biscottes", "pain", etc.
 
-    console.log('[AI] Analyse du texte:', text.substring(0, 80));
+    const { cleanedText, quotedItems } = _extractQuotedItems(text.trim());
+    const aiInput = _normalizeAiInputText(cleanedText);
+    const isNegativeConfirmation = _isNegativeConfirmationMessage(text);
+    const isQuestionLike = _isQuestionLikeMessage(text);
+    console.log('[AI] Analyse du texte:', aiInput.substring(0, 80), '| quoted:', quotedItems.length);
 
     try {
-        const token = localStorage.getItem('token');
-        // Utiliser fetch directement avec les bons headers
-        const aiRes = await fetch('/api/ai/extract-multi', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token
-            },
-            body: JSON.stringify({ text: text.trim() })
-        });
-
-        console.log('[AI] Réponse status:', aiRes.status);
-        if (!aiRes.ok) {
-            console.warn('[AI] Erreur HTTP:', aiRes.status);
-            return;
-        }
-
-        const aiData = await aiRes.json();
-        console.log('[AI] Items reçus:', JSON.stringify(aiData.items));
-
-        const items = aiData.items;
-        if (!items || !items.length) {
-            console.warn('[AI] Aucun item retourné');
-            return;
-        }
-
         const gid = currentGroupId;
         const did = document.getElementById('sel-dev')?.value || '';
         if (!gid) { console.warn('[AI] Pas de groupe courant'); return; }
 
-        for (const item of items) {
+        let aiItems = [];
+        // Si tout (ou quasi tout) est entre guillemets, on respecte le verbatim :
+        // pas d'appel IA serveur, pas de normalisation, pas de correction.
+        const shouldBypassServerAi = (quotedItems.length > 0 && aiInput.trim().length < 2);
+        if (!shouldBypassServerAi && aiInput.length >= 2) {
+            const token = localStorage.getItem('token');
+            // Utiliser fetch directement avec les bons headers
+            const aiRes = await fetch('/api/ai/extract-multi', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify({ text: aiInput, sourceMessageId: sourceMessageId || null })
+            });
+
+            console.log('[AI] Réponse status:', aiRes.status);
+            if (aiRes.ok) {
+                const aiData = await aiRes.json();
+                console.log('[AI] Items reçus:', JSON.stringify(aiData.items));
+                aiItems = Array.isArray(aiData.items) ? aiData.items : [];
+            } else {
+                console.warn('[AI] Erreur HTTP:', aiRes.status);
+            }
+        }
+
+        // Les items entre guillemets sont traités comme des items "verbatim".
+        // Si le message est une question, ils deviennent incertains (préfixe ?).
+        const rawItems = [
+            ...aiItems,
+            ...quotedItems.map(q => ({ text: q, uncertain: isQuestionLike, verbatim: true }))
+        ];
+        if (!rawItems.length) {
+            console.warn('[AI] Aucun item retourné');
+            return;
+        }
+
+        for (const item of rawItems) {
             const itemText = typeof item === 'object' ? item.text : item;
-            const uncertain = typeof item === 'object' ? !!item.uncertain : false;
+            // Si c'est une question, on marque les items comme incertains par défaut.
+            const uncertain = (typeof item === 'object' ? !!item.uncertain : false) || isQuestionLike;
             if (!itemText || itemText.trim().length < 1) continue;
+            const itemKey = _normalizeExtractedItemKey(itemText);
+            if (!itemKey) continue;
+
+            // Négation partielle (ex: "oui ... et non pas de lardons") : suppression item-par-item
+            // sans empêcher l'ajout des autres items certains.
+            if (_isNegatedItemInText(text, itemText)) {
+                const unsureMatches = allMsgs.filter(m =>
+                    m.postitId === postitId &&
+                    m.isNote &&
+                    m.senderName === '✨ IA' &&
+                    !!m.isUncertain &&
+                    _normalizeExtractedItemKey(m.content) === itemKey
+                );
+                for (const old of unsureMatches) {
+                    try {
+                        await fetchAuth('/api/messages/' + old._id, { method: 'DELETE' });
+                        allMsgs = allMsgs.filter(m => m._id !== old._id);
+                    } catch (e) {}
+                }
+                continue;
+            }
+
+            if (isNegativeConfirmation) {
+                const unsureMatches = allMsgs.filter(m =>
+                    m.postitId === postitId &&
+                    m.isNote &&
+                    m.senderName === '✨ IA' &&
+                    !!m.isUncertain &&
+                    _normalizeExtractedItemKey(m.content) === itemKey
+                );
+                for (const old of unsureMatches) {
+                    try {
+                        await fetchAuth('/api/messages/' + old._id, { method: 'DELETE' });
+                        allMsgs = allMsgs.filter(m => m._id !== old._id);
+                    } catch (e) {}
+                }
+                // En cas de "non/pas ...", on ne rajoute pas de ligne.
+                continue;
+            }
+
+            // Si un item incertain équivalent existe déjà et qu'on reçoit une confirmation,
+            // on supprime l'ancienne note incertaine pour ne garder que la version certaine.
+            if (!uncertain) {
+                const unsureMatches = allMsgs.filter(m =>
+                    m.postitId === postitId &&
+                    m.isNote &&
+                    m.senderName === '✨ IA' &&
+                    !!m.isUncertain &&
+                    _normalizeExtractedItemKey(m.content) === itemKey
+                );
+                for (const old of unsureMatches) {
+                    try {
+                        await fetchAuth('/api/messages/' + old._id, { method: 'DELETE' });
+                        allMsgs = allMsgs.filter(m => m._id !== old._id);
+                    } catch (e) {}
+                }
+            }
             console.log('[AI] Envoi item:', itemText, 'uncertain:', uncertain);
             socket.emit('send-message', {
                 groupId: gid,
@@ -3947,7 +4666,8 @@ async function aiAutoExtract(text, postitId, sourceMessageId) {
                 postitId: postitId,
                 content: itemText.trim(),
                 senderName: '✨ IA',
-                isNote: true,
+                // Visible sur e-ink par défaut
+                isNote: false,
                 isUncertain: uncertain,
                 sourceMessageId: _currentSourceMsgId || null,  // lien vers le message source
                 type: 'text'
@@ -3956,6 +4676,8 @@ async function aiAutoExtract(text, postitId, sourceMessageId) {
         }
     } catch(e) {
         console.error('[AI] Exception:', e.message);
+    } finally {
+        if (sourceMessageId) _aiExtractInProgress.delete(sourceMessageId);
     }
 }
 
@@ -3995,8 +4717,7 @@ function send() {
     input.placeholder = 'Écrire un message…';
     input.blur();
     setTimeout(() => input.focus(), 50);
-    // Analyse IA automatique en arrière-plan (silencieuse)
-    const _sendTs = Date.now(); setTimeout(() => aiAutoExtract(text, pid, 'ts_' + _sendTs), 300);
+    // L'analyse IA est declenchee par l'icône oeil sur le message.
 }
 
 

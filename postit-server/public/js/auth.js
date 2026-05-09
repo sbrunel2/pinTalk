@@ -2,6 +2,7 @@
 // AUTH — Connexion / Inscription complète avec i18n
 // ═══════════════════════════════════════════════════════════════════════
 let isRegisterMode = false;
+let authPasswordToggleBound = false;
 
 // ── Helpers i18n (disponibles avant app.js) ───────────────────────────
 function _t(key) {
@@ -16,6 +17,42 @@ function _t(key) {
         nameRequired:'Veuillez remplir tous les champs',
     };
     return fallback[key] || key;
+}
+
+function authPasswordField(placeholder, compact = false) {
+    const padding = compact ? '10px' : '12px';
+    const fontSize = compact ? '13px' : '14px';
+    return `
+        <div style="position:relative;">
+            <input type="password" id="auth-pass" placeholder="${placeholder}"
+                   style="width:100%;padding:${padding};padding-right:42px;border:2px solid var(--accent);font-size:${fontSize};background:white;box-sizing:border-box;">
+            <button type="button" class="auth-pass-toggle" data-target="auth-pass" aria-label="Afficher ou masquer le mot de passe"
+                    style="position:absolute;right:0;top:0;height:100%;width:40px;background:none;border:none;cursor:pointer;font-size:16px;opacity:0.6;color:var(--accent);">
+                👁
+            </button>
+        </div>`;
+}
+
+function bindAuthPasswordToggle() {
+    if (authPasswordToggleBound) return;
+    const authScreen = document.getElementById('auth-screen');
+    if (!authScreen) return;
+
+    authScreen.addEventListener('click', (event) => {
+        const btn = event.target.closest('.auth-pass-toggle');
+        if (!btn) return;
+
+        const targetId = btn.dataset.target;
+        const input = targetId ? document.getElementById(targetId) : null;
+        if (!input) return;
+
+        const hidden = input.type === 'password';
+        input.type = hidden ? 'text' : 'password';
+        btn.textContent = hidden ? '🔒' : '👁';
+        btn.style.opacity = hidden ? '0.75' : '0.6';
+    });
+
+    authPasswordToggleBound = true;
 }
 
 // ── Rendu du formulaire ───────────────────────────────────────────────
@@ -37,8 +74,7 @@ function renderAuthForm() {
             </div>
             <div style="margin-bottom:20px;">
                 <div style="font-size:8px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">${_t('passwordLabel')}</div>
-                <input type="password" id="auth-pass" placeholder="${_t('passwordLabel')}"
-                       style="width:100%;padding:12px;border:2px solid var(--accent);font-size:14px;background:white;box-sizing:border-box;">
+                ${authPasswordField(_t('passwordLabel'))}
             </div>
             <button id="auth-btn" onclick="handleAuth()"
                     style="width:100%;padding:14px;background:var(--accent);color:white;border:none;font-weight:900;font-size:13px;text-transform:uppercase;cursor:pointer;margin-bottom:12px;">
@@ -100,8 +136,7 @@ function renderAuthForm() {
             <!-- 5. Mot de passe -->
             <div style="margin-bottom:20px;">
                 <div style="font-size:8px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;" id="lbl-pass">${_t('passwordLabel')}</div>
-                <input type="password" id="auth-pass" placeholder="${_t('passwordLabel')}"
-                       style="width:100%;padding:10px;border:2px solid var(--accent);font-size:13px;background:white;box-sizing:border-box;">
+                ${authPasswordField(_t('passwordLabel'), true)}
             </div>
 
             <button id="auth-btn" onclick="handleAuth()"
@@ -233,5 +268,6 @@ async function handleAuth() {
 
 // Initialiser le formulaire au chargement
 document.addEventListener('DOMContentLoaded', () => {
+    bindAuthPasswordToggle();
     renderAuthForm();
 });

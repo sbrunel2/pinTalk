@@ -51,11 +51,16 @@ html, body { background: var(--bg); overflow: hidden; height: 100%; position: fi
     padding-top: 52px !important; 
 }
 
-input, select, textarea { 
+input:not([type=checkbox]):not([type=radio]), select, textarea { 
     width: 100%; background: #fff; border: 2px solid var(--accent); 
     padding: 8px 12px !important; font-size: 14px; margin-bottom: 8px; outline: none; appearance: none;
     background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='square' stroke-linejoin='miter'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 12px center;
+}
+input[type=checkbox], input[type=radio] {
+    width: auto; height: auto; appearance: auto; -webkit-appearance: auto;
+    background-image: none; border: none; padding: 0 !important;
+    margin-bottom: 0; outline: revert; cursor: pointer;
 }
 
 input[type="text"], input[type="email"], input[type="password"], textarea { background-image: none; }
@@ -160,6 +165,8 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 #auth-screen.hidden { display: none !important; }
 .hidden { display: none !important; }
 #auth-screen input { margin-bottom: 20px !important; }
+#auth-screen div input { margin-bottom: 0 !important; }
+#auth-screen div { margin-bottom: 20px; width: 100%; }
 
 @keyframes flash-item { 0%, 50% { background: #000; color: #fff; } 100% { background: transparent; color: inherit; } }
 .new-item-flash { animation: flash-item 2s ease-out; }
