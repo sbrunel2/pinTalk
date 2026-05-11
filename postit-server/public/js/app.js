@@ -2637,6 +2637,10 @@ function _nameToHue(name) {
 function selectPostit(postitId) {
     _vibrate(20);
     currentPostitId = postitId;
+    // Mémoriser le dernier pintalk par groupe
+    if (currentGroupId && postitId) {
+        localStorage.setItem('lastPintalk_' + currentGroupId, postitId);
+    }
     _updateMessageBarState(!!postitId);
     const selPos = document.getElementById('sel-pos');
     if (selPos) selPos.value = postitId;
@@ -3187,9 +3191,13 @@ async function loadGroupData(groupId) {
             postits.sort((a, b) => new Date(a.pickupDate) - new Date(b.pickupDate));
 
             if (postits && postits.length > 0) {
-                // Déterminer le postit à sélectionner (mémorisé ou premier)
-                const targetId = (currentPostitId && postits.find(p => p._id === currentPostitId))
-                    ? currentPostitId : postits[0]._id;
+                // Dernier pintalk mémorisé pour CE groupe spécifiquement
+                const savedPintalk = localStorage.getItem('lastPintalk_' + groupId);
+                const targetId = (savedPintalk && postits.find(p => p._id === savedPintalk))
+                    ? savedPintalk
+                    : (currentPostitId && postits.find(p => p._id === currentPostitId))
+                        ? currentPostitId
+                        : postits[0]._id;
                 currentPostitId = targetId;
                 // Rendre les tuiles postits
                 renderPostitTabs(postits, targetId);
