@@ -38,23 +38,59 @@ e-Postit Pro distingue deux types de groupes, avec des règles de rôles et d'ac
 - Ne peut pas inviter d'autres membres dans le groupe
 - Ne peut pas gérer les accès des autres membres
 
+> **Note schéma** : Le schéma `Permission` en base contient `role ('admin'|'employe'|'client')` hérité du modèle pro. Pour les groupes perso, seuls deux statuts existent : `owner` (stocké dans `Group.ownerEmail`) et `membre` (entrée Permission sans rôle pro). Le rôle `admin` n'existe pas en contexte perso et ne doit pas être assigné.
+
 ### 2.2 Règles d'accès aux Pintalk
 
 - Par défaut, tous les membres du groupe ont accès à tous les pintalk du groupe
 - Un propriétaire peut **restreindre** un pintalk à une liste nominative (`allowedEmails`)
   - Si `allowedEmails` est non vide, seuls les utilisateurs listés y ont accès
   - Le propriétaire conserve toujours l'accès, qu'il soit dans `allowedEmails` ou non
-- Un propriétaire peut **inviter un utilisateur extérieur** au groupe sur un pintalk précis
-  - Cet utilisateur voit le groupe dans sa liste de groupes (accès limité à ce pintalk uniquement)
-  - Il n'est pas membre du groupe — il ne voit pas les autres pintalk
+- Un propriétaire peut **inviter un utilisateur extérieur** au groupe sur un pintalk précis — cet utilisateur obtient le statut **`membre-pintalk`** :
+  - Il voit le groupe dans sa liste de groupes
+  - Il n'accède qu'aux pintalk sur lesquels il est explicitement invité
+  - Il ne voit pas les autres pintalk du groupe
+  - Si le propriétaire le retire du pintalk, ce pintalk disparaît de sa vue
+  - Si il n'est plus membre-pintalk d'aucun pintalk du groupe, le groupe disparaît également de sa liste de groupes
+- Seul le propriétaire peut modifier les droits et la liste des membres d'un pintalk
 
-### 2.3 Limites
+### 2.3 Personnalisation visuelle
+
+| Élément | Qui peut modifier | Portée |
+|---|---|---|
+| Nom du groupe | Propriétaire uniquement | Identique pour tous |
+| Logo du groupe | Propriétaire uniquement | Identique pour tous |
+| Couleur de la tuile groupe | Chaque membre pour lui-même | Propre à chaque utilisateur |
+| Forme de la tuile groupe | Chaque membre pour lui-même | Propre à chaque utilisateur |
+| Couleur des tuiles pintalk | Chaque membre pour lui-même | Propre à chaque utilisateur |
+| Forme des tuiles pintalk | Chaque membre pour lui-même | Propre à chaque utilisateur |
+| Membres et droits d'un pintalk | Propriétaire uniquement | — |
+
+### 2.4 Limites
 
 - **Maximum 4 pintalk** par groupe perso
 - Une fois 4 pintalk créés, la tuile `+` disparaît pour le propriétaire
 - Cette limite est gérée côté UI (bouton masqué) — **à enforcer également côté API** (`POST /api/postits`)
 
-### 2.4 Interface — Page Groupes
+### 2.5 Cycle de vie du groupe et du propriétaire
+
+#### Suppression du groupe
+- Seul le propriétaire peut supprimer son groupe
+- Le propriétaire **ne peut pas quitter** son groupe — il doit soit le supprimer, soit le transférer
+- La suppression entraîne la suppression de **tous les pintalk et tous les messages** associés
+- Tous les membres (et membres-pintalk) perdent l'accès immédiatement
+
+#### Transfert de propriété
+- Le propriétaire peut transférer son groupe à un membre existant
+- Le membre désigné devient le nouveau propriétaire du groupe
+- L'ancien propriétaire devient **membre** du groupe — le nouveau propriétaire peut le conserver ou le retirer
+- Cette action est irréversible sauf si le nouveau propriétaire effectue un retransfert
+
+#### Suppression de compte
+- Si un propriétaire supprime son compte, ses groupes sont supprimés (avec tous leurs pintalk)
+- *Alternative à envisager* : proposer le transfert avant suppression définitive du compte
+
+### 2.6 Interface — Page Groupes
 
 - Affiche tous les groupes auxquels l'utilisateur a accès :
   - Groupes dont il est propriétaire
@@ -63,7 +99,7 @@ e-Postit Pro distingue deux types de groupes, avec des règles de rôles et d'ac
 - Chaque groupe est représenté par une tuile personnalisable (couleur, forme, logo, police)
 - Les tuiles sont réorganisables par drag & pinch
 
-### 2.5 Interface — Page Chat (dans un groupe)
+### 2.7 Interface — Page Chat (dans un groupe)
 
 - À l'entrée dans un groupe, l'utilisateur arrive sur le **dernier pintalk consulté** dans ce groupe (mémorisé par `localStorage`)
 - Si aucun historique, le premier pintalk de la liste est sélectionné
@@ -105,27 +141,69 @@ Un groupe pro comporte trois rôles : **Propriétaire**, **Employé**, **Client*
 - Peut cocher les produits dans l'e-ink au fur et à mesure de la préparation
 - Peut modifier ou supprimer un produit **coché** (en cours de préparation) si le propriétaire lui en a accordé le droit
 - Ne peut pas supprimer une commande
-- Ne peut pas déclarer "Ticket de caisse prêt" (propriétaire uniquement)
+- Peut déclarer "Ticket de caisse prêt" si le droit `ticket_caisse` lui est accordé
 
 #### Client (`client`)
 - Ajouté au groupe par le propriétaire (ou employé si droit accordé)
 - Ne voit que les pintalk dont il est propriétaire (`ownerEmail`) au sein du groupe
 - Peut créer ses propres commandes (pintalk), dans la limite de **4 commandes ouvertes simultanément**
   - Une commande "ouverte" = statut autre que `terminée` ou `annulée`
-- Peut inviter d'autres personnes à participer à ses propres commandes
+- Peut inviter d'autres personnes à participer à ses propres commandes (clients du groupe ou personnes extérieures au groupe)
+  - La personne invitée obtient le statut **co-client** du pintalk : elle a exactement les mêmes droits que le client d'origine sur ce pintalk (ajout/modification produits, validation, suppression selon état)
+  - C'est un **partage à droits égaux** — il n'y a pas de hiérarchie entre le client d'origine et ses co-clients
+  - Tous les co-clients peuvent à leur tour inviter d'autres personnes sur ce pintalk
   - Ne peut pas retirer le propriétaire du groupe ni les employés de ses commandes
+  - Un co-client peut quitter un pintalk ; le client d'origine ne peut pas retirer un co-client (seul le propriétaire du groupe le peut)
+  - **Cas particulier — employé invité comme co-client** : un employé invité sur un pintalk cumule ses deux statuts. Il conserve l'intégralité de ses droits employé (préparer, cocher les produits, déclarer ticket de caisse si droit accordé) ET acquiert en plus les droits co-client (modifier produits non cochés, valider la commande, etc.). C'est toujours le droit le plus permissif qui s'applique sur chaque action.
 - Peut supprimer ses commandes sous conditions (voir §3.4 Cycle de vie)
 - Peut modifier le contenu de ses commandes sous conditions (voir §3.4 Cycle de vie)
 
-### 3.2 Droits configurables par le propriétaire (Employés)
+### 3.2 Système de rôles et droits (Employés)
 
-| Droit | Description | Défaut |
+Les droits des employés sont gérés via un **système de rôles** (groupes de droits) défini par le propriétaire du groupe. Chaque employé peut se voir attribuer un ou plusieurs rôles.
+
+#### Rôles prédéfinis (créés automatiquement à la création du groupe pro)
+
+| Rôle | Description | Droits inclus |
 |---|---|---|
-| Créer des commandes | L'employé peut créer des pintalk pour des clients | ❌ |
-| Accès à un pintalk | Accordé pintalk par pintalk par le propriétaire | ❌ |
-| Modifier/supprimer un produit coché | Peut intervenir sur les produits en cours de préparation | ❌ |
+| `admin` | Administration complète | Tous les droits sauf suppression du groupe |
+| `preparateur` | Préparation de commandes uniquement | Voir commandes validées, démarrer préparation, cocher produits |
+| `caisse` | Gestion de la caisse uniquement | Déclarer "Ticket de caisse prêt" |
 
-> 🔲 D'autres droits pourront être ajoutés lors de la suite du descriptif.
+#### Droits disponibles (granulaires)
+
+| Droit | Description |
+|---|---|
+| `creer_commande` | Créer des pintalk (commandes) pour des clients |
+| `acces_pintalk` | Accès à un pintalk spécifique (accordé pintalk par pintalk) |
+| `modifier_produit_coche` | Modifier ou supprimer un produit coché en cours de préparation |
+| `preparer_commande` | Déclarer le début de préparation + cocher les produits |
+| `ticket_caisse` | Déclarer une commande "Ticket de caisse prêt" |
+| `gerer_employes` | Ajouter des employés et leur attribuer des rôles (droit admin) |
+
+#### Règles de gestion des rôles
+
+- Le **propriétaire** peut créer, modifier et supprimer des rôles personnalisés pour son groupe
+- Le **propriétaire** associe chaque employé à un ou plusieurs rôles
+- Un employé ayant le rôle `admin` peut :
+  - Ajouter des employés au groupe
+  - Attribuer des rôles aux employés (sauf le rôle propriétaire)
+  - **Ne peut pas** se donner des droits supérieurs à ceux qu'il possède lui-même
+- Un employé ne peut **jamais** devenir propriétaire du groupe sauf transfert explicite
+- Le **transfert de propriété** est une action réservée exclusivement au propriétaire actuel :
+  - Il désigne un employé comme nouveau propriétaire
+  - L'ancien propriétaire devient employé avec rôle `admin` (ou rôle défini par le nouveau propriétaire)
+  - Cette action est irréversible sauf si le nouveau propriétaire effectue un retransfert
+
+#### Interface de gestion des rôles
+
+Une interface dédiée (accessible depuis les paramètres du groupe pro) permet au propriétaire (et aux admins) de :
+- Voir la liste des rôles existants du groupe
+- Créer un nouveau rôle en sélectionnant les droits souhaités parmi la liste des droits disponibles
+- Modifier un rôle existant (changer son nom, ses droits)
+- Supprimer un rôle (les employés qui l'avaient se retrouvent sans ce rôle)
+- Attribuer / retirer des rôles à chaque employé
+- Voir pour chaque employé la liste de ses rôles actifs et le cumul de ses droits effectifs
 
 ### 3.3 Limites
 
@@ -185,7 +263,7 @@ Un groupe pro comporte trois rôles : **Propriétaire**, **Employé**, **Client*
 
 ### 3.5 Interface
 
-> 🔲 À compléter — suite du descriptif.
+> 🔲 À compléter — interface et détails UX à définir lors de la suite du descriptif.
 
 ### 3.6 Spécificités pro
 
@@ -212,7 +290,10 @@ Un groupe pro comporte trois rôles : **Propriétaire**, **Employé**, **Client*
 | Personnaliser l'apparence de ses tuiles | ✅ | ✅ |
 | Supprimer un pintalk | ✅ | ❌ |
 | Supprimer le groupe | ✅ | ❌ |
-| Quitter le groupe | — | ✅ |
+| Quitter le groupe | ❌ (doit supprimer ou transférer) | ✅ |
+| Transférer la propriété du groupe | ✅ | ❌ |
+| Inviter un membre-pintalk (externe) | ✅ | ❌ |
+| Retirer un membre-pintalk d'un pintalk | ✅ | ❌ |
 
 ### Groupes Professionnels
 
@@ -227,20 +308,38 @@ Un groupe pro comporte trois rôles : **Propriétaire**, **Employé**, **Client*
 | Voir les commandes `brouillon` | ✅ | ❌ | ✅ (les siennes) |
 | Voir les commandes `validée` et + | ✅ | ✅ (si accès) | ✅ (les siennes) |
 | Participer au chat d'un pintalk | ✅ | ⚙️ si accès accordé | ✅ (ses commandes) |
-| Inviter sur un pintalk | ✅ | ❌ | ✅ (ses commandes, sans retirer owner/employé) |
+| Inviter un co-client sur un pintalk | ✅ | ❌ | ✅ (ses commandes + co-clients peuvent aussi inviter) |
 | Modifier produits (non cochés) | ✅ | ✅ | ✅ (si commande non en préparation) |
+| Droits du co-client sur un pintalk | — | — | = droits du client d'origine |
+| Retirer un co-client d'un pintalk | ✅ | ❌ | ❌ (peut quitter, pas retirer) |
 | Modifier produits (cochés) | ✅ | ⚙️ si droit | ❌ |
 | Supprimer une commande | ✅ | ❌ | ✅ (si statut `brouillon` ou `validée`) |
 | Démarrer la préparation | ✅ | ✅ | ❌ |
 | Cocher produits (e-ink) | ✅ | ✅ | ❌ |
-| Déclarer "Ticket de caisse prêt" | ✅ | ❌ | ❌ |
+| Déclarer "Ticket de caisse prêt" | ✅ | ⚙️ si droit `ticket_caisse` | ❌ |
 | Supprimer le groupe | ✅ | ❌ | ❌ |
+| Transférer la propriété du groupe | ✅ | ❌ | ❌ |
+| Gérer les rôles du groupe | ✅ | ⚙️ si rôle `admin` | ❌ |
+| Ajouter un employé | ✅ | ⚙️ si rôle `admin` | ❌ |
 
 > ⚙️ = conditionnel selon droits accordés par le propriétaire
+> Les droits se cumulent quand un employé a plusieurs rôles.
 
 ---
 
 ## 5. Notes d'implémentation
+
+### Point d'attention — schéma `Permission` et rôles dynamiques pro
+
+Le schéma actuel `Permission` contient un champ `role` de type `String` avec une valeur fixe parmi `('admin'|'employe'|'client')`. Ce modèle est insuffisant pour les groupes pro qui ont besoin de rôles dynamiques configurables par groupe.
+
+**Ce qu'il faudra faire avant d'implémenter la partie pro :**
+- Créer une collection `Role` : `{ groupId, name, droits: [String], isDefault: Boolean }`
+- Modifier le schéma `Permission` pour référencer un ou plusieurs rôles : `{ groupId, userEmail, roles: [ObjectId → Role], type: ('owner'|'employe'|'client'|'membre'|'membre-pintalk') }`
+- Les droits effectifs d'un employé = union de tous les droits de ses rôles
+- Pour les groupes perso, le champ `roles` est vide — seul `type` compte (`owner` ou `membre`)
+
+Ce changement de schéma est **significatif** et doit être anticipé avant tout développement de la partie pro.
 
 ### État actuel du code
 
