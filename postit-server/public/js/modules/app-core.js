@@ -382,30 +382,43 @@ async function initApp() {
         forceNew: true
     });
     
-    socket.on('new-message', m => { 
-        allMsgs.unshift(m); 
-        // Par défaut, l'envoi d'un message texte (non masqué) déclenche l'analyse IA,
-        // et donc l'alimentation de la zone e-ink.
+    socket.on('new-message', m => {
+        allMsgs.unshift(m);
+        // Déclencher l'analyse IA UNIQUEMENT sur les nouveaux messages
+        // (pas sur le rechargement de l'historique)
         try {
-            const isMine = !!(currentUser && m.senderName === currentUser.name);
-            const isText = (!m.type || m.type === 'text');
+            const isMine    = !!(currentUser && m.senderName === currentUser.name);
+            const isText    = (!m.type || m.type === 'text');
             const isUserMsg = (m.senderName !== '✨ IA');
             const hiddenFromEink = (m.isNote === true);
-            if (isMine && isText && isUserMsg && !hiddenFromEink && m.postitId) {
+            // _historyJustLoaded : flag positionné pendant 2s après history-data
+            // → évite de relancer l'IA sur des messages de l'historique
+            const isFromHistory = !!window._historyJustLoaded;
+            if (isMine && isText && isUserMsg && !hiddenFromEink && m.postitId && !isFromHistory) {
+                // Vérification robuste : sourceMessageId OU contenu+postitId identique
                 const alreadyHasAi = allMsgs.some(x =>
-                    x.senderName === '✨ IA' &&
-                    x.postitId === m.postitId &&
-                    x.sourceMessageId === m._id
+                    x.senderName === '✨ IA' && x.postitId === m.postitId &&
+                    (x.sourceMessageId === m._id || !x.sourceMessageId)
+                        ? x.sourceMessageId === m._id
+                        : false
                 );
-                if (!alreadyHasAi) setTimeout(() => aiAutoExtract(m.content || '', m.postitId, m._id), 120);
+                if (!alreadyHasAi && !_aiExtractInProgress.has(m._id)) {
+                    _aiExtractInProgress.add(m._id);
+                    setTimeout(() => aiAutoExtract(m.content || '', m.postitId, m._id), 120);
+                }
             }
         } catch(e) {}
-        refreshView(true); 
+        refreshView(true);
     });
-    
-    socket.on('history-data', h => { 
-        allMsgs = h; 
-        refreshView(true); 
+
+    socket.on('history-data', h => {
+        allMsgs = h;
+        // Marquer qu'on vient de charger l'historique pendant 2s
+        // pour bloquer les déclenchements IA intempestifs
+        window._historyJustLoaded = true;
+        clearTimeout(window._historyLoadedTimer);
+        window._historyLoadedTimer = setTimeout(() => { window._historyJustLoaded = false; }, 2000);
+        refreshView(true);
     });
     socket.on('message-updated', (data) => {
         const msg = allMsgs.find(m => m._id === data.messageId);

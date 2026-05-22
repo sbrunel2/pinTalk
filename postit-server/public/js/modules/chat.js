@@ -61,10 +61,13 @@ async function toggleNote(messageId) {
 function toggleLineCheck(messageId) {
     const btn = document.getElementById('btn-status-main');
     const currentStatus = btn ? btn.getAttribute('data-status') : "";
+    const isPro = currentGroupConfig?.isPro;
 
-    // IMPORTANT : On autorise la modification si c'est "Terminé" 
-    // pour pouvoir revenir en arrière. On ne bloque que le définitif.
-    if (currentStatus === "En caisse" || currentStatus === "Annulé") {
+    // Bloquer si statut terminal (pro ou perso)
+    const lockedStatuses = isPro
+        ? [PRO_STATUS.TERMINEE, PRO_STATUS.ANNULEE, PRO_STATUS.TICKET]
+        : ["En caisse", "Annulé"];
+    if (currentStatus && lockedStatuses.includes(currentStatus)) {
         console.warn("Action bloquée : Commande " + currentStatus);
         return;
     }
@@ -79,25 +82,26 @@ function toggleLineCheck(messageId) {
     const pid = currentPostitId || (pSel ? pSel.value : null);
     if (!pid) return;
 
-    // Recalcul du statut automatique
-    // Chat = messages normaux uniquement (pas les notes IA)
-    const lines = allMsgs.filter(m =>
-        m.postitId === pid &&
-        m.senderName !== '✨ IA'
-    );
+    const lines = allMsgs.filter(m => m.postitId === pid && m.senderName !== '✨ IA');
     const checkedCount = lines.filter(m => m.checked).length;
     const totalLines = lines.length;
 
-    let newStatus = "En attente";
-    if (totalLines > 0) {
-        if (checkedCount === totalLines) {
-            newStatus = "Terminé";
-        } else if (checkedCount > 0) {
-            newStatus = "En préparation"; 
+    if (isPro) {
+        // ── Logique pro : on NE change PAS le statut automatiquement ici ──────
+        // Le statut pro est géré manuellement via showStatusMenu ou la vue pile
+        // (le cochage déclenche la demande de confirmation dans pro-queue.js)
+        if (typeof _proCheckCompletion === 'function') {
+            _proCheckCompletion(pid, checkedCount, totalLines);
         }
+    } else {
+        // ── Logique perso : statut automatique selon cochage ─────────────────
+        let newStatus = "En attente";
+        if (totalLines > 0) {
+            if (checkedCount === totalLines) newStatus = "Terminé";
+            else if (checkedCount > 0)       newStatus = "En préparation";
+        }
+        socket.emit('update-postit-status', { groupId: currentGroupId, postitId: pid, status: newStatus });
     }
-
-    socket.emit('update-postit-status', { postitId: pid, status: newStatus });
     refreshView(false);
 }
 
@@ -110,7 +114,7 @@ function changeStatusManually(pid) {
     if (choice >= 1 && choice <= 4) {
         const newStatus = states[choice - 1];
         // On envoie au serveur
-        socket.emit('update-postit-status', { 
+        socket.emit('update-postit-status', { groupId: currentGroupId, 
             postitId: pid, 
             status: newStatus 
         });
@@ -152,11 +156,23 @@ async function _refreshViewInner(forceScrollBottom = false) {
             if (res && res.ok) {
                 const p = await res.json();
                 currentStatus = p.status;
-                let statusBg = "bg-black"; 
-                if (p.status === "En préparation") statusBg = "bg-orange-500";
-                if (p.status === "En caisse") statusBg = "bg-blue-500";
-                if (p.status === "Terminé") statusBg = "bg-green-600";
-                if (p.status === "Annulé") statusBg = "bg-gray-500";
+                // ── Couleurs selon groupe pro ou perso ───────────────────────
+                let statusBg = "bg-black";
+                const isPro = currentGroupConfig?.isPro;
+                if (isPro) {
+                    if (p.status === PRO_STATUS.VALIDEE)   statusBg = "bg-amber-500";
+                    if (p.status === PRO_STATUS.EN_PREP)   statusBg = "bg-orange-500";
+                    if (p.status === PRO_STATUS.PRETE)     statusBg = "bg-blue-500";
+                    if (p.status === PRO_STATUS.PRETE_MQ)  statusBg = "bg-purple-500";
+                    if (p.status === PRO_STATUS.TICKET)    statusBg = "bg-teal-600";
+                    if (p.status === PRO_STATUS.TERMINEE)  statusBg = "bg-green-600";
+                    if (p.status === PRO_STATUS.ANNULEE)   statusBg = "bg-gray-500";
+                } else {
+                    if (p.status === "En préparation") statusBg = "bg-orange-500";
+                    if (p.status === "En caisse")      statusBg = "bg-blue-500";
+                    if (p.status === "Terminé")        statusBg = "bg-green-600";
+                    if (p.status === "Annulé")         statusBg = "bg-gray-500";
+                }
                 
                 formattedDate = "--/--/---- --:--";
                 if (p.pickupDate) {
@@ -179,7 +195,7 @@ async function _refreshViewInner(forceScrollBottom = false) {
                 const getStatusSelect = (fontSizeClass) => `
                     <button id="btn-status-main" data-status="${p.status}" onclick="event.stopPropagation(); showStatusMenu(this, '${p._id}')" 
                             class="${statusBg} text-white font-black uppercase ${fontSizeClass} border border-black cursor-pointer w-[95px] h-[20px] flex items-center justify-center leading-none relative z-30 active:scale-95">
-                        ${p.status === 'En préparation' ? 'Prépa.' : (p.status === 'En attente' ? 'Attente' : p.status)}
+                        ${_statusLabel(p.status)}
                     </button>`;
 
                 headerHtml = `
@@ -206,7 +222,6 @@ async function _refreshViewInner(forceScrollBottom = false) {
                     ${cancelCommentHtml}
                 </div>`;
 
-                const isPro = currentGroupConfig?.isPro;
                 const groupName  = currentGroupConfig?.name  || '';
                 const userName   = currentUser?.name || currentUser?.firstname || '';
 
@@ -516,7 +531,7 @@ function handleSelectStatus(selectElement, pid) {
         }
     }
 
-    socket.emit('update-postit-status', { 
+    socket.emit('update-postit-status', { groupId: currentGroupId, 
         postitId: pid, 
         status: newStatus,
         comment: cancelReason 
@@ -548,19 +563,21 @@ async function send() {
 
 
 function showStatusMenu(btn, pid) {
-    // 1. Sécurité : si le bouton n'existe pas, on sort pour ne pas faire planter le script
     if (!btn) return;
-
-    // 2. On récupère le statut
     const currentStatus = btn.getAttribute('data-status');
+    const isPro = currentGroupConfig?.isPro;
+    const myRole = currentGroupConfig?.myRole || 'owner';
+    const myDroits = currentGroupConfig?.myDroits || [];
 
-    // 3. BLOCAGE : On vérifie si currentStatus existe ET s'il est verrouillé
-    if (currentStatus && (currentStatus === "En caisse" || currentStatus === "Terminé")) {
-        alert("Cette commande est validée en caisse. Le statut ne peut plus être modifié.");
-        return; 
+    // Statuts terminaux → verrouillé pour tous sauf proprio
+    const lockedStatuses = isPro
+        ? [PRO_STATUS.TERMINEE, PRO_STATUS.ANNULEE]
+        : ["En caisse", "Terminé"];
+    if (currentStatus && lockedStatuses.includes(currentStatus) && myRole !== 'owner') {
+        alert("Cette commande est clôturée. Seul le propriétaire peut modifier son statut.");
+        return;
     }
 
-    // 4. Si on arrive ici, c'est que ce n'est pas verrouillé, on affiche le menu
     const existing = document.getElementById('status-popup');
     if (existing) existing.remove();
 
@@ -573,16 +590,32 @@ function showStatusMenu(btn, pid) {
     content.className = 'bg-white border-4 border-black p-4 w-full shadow-[8px_8px_0px_#000]';
     content.onclick = (e) => e.stopPropagation();
 
-    const options = ["En attente", "En préparation", "Terminé", "Annulé"];
-    // Note : On n'ajoute pas "En caisse" ici car il est automatique via l'upload
-    
+    // Statuts disponibles selon rôle et type de groupe
+    let options;
+    if (isPro) {
+        const isOwnerOrAdmin = myRole === 'owner' || myDroits.includes('gerer_employes');
+        if (isOwnerOrAdmin) {
+            options = Object.values(PRO_STATUS); // tous les statuts
+        } else if (myRole === 'employe') {
+            // Employé : peut avancer dans le cycle, pas revenir
+            options = [PRO_STATUS.EN_PREP, PRO_STATUS.PRETE, PRO_STATUS.PRETE_MQ];
+            if (myDroits.includes('ticket_caisse')) options.push(PRO_STATUS.TICKET);
+            options.push(PRO_STATUS.TERMINEE);
+        } else {
+            // Client pro : peut valider ou annuler sa commande en brouillon/validée
+            options = [PRO_STATUS.VALIDEE, PRO_STATUS.ANNULEE];
+        }
+    } else {
+        options = ["En attente", "En préparation", "Terminé", "Annulé"];
+    }
+
     content.innerHTML = `
         <div class="text-[10px] font-black uppercase mb-4 opacity-40">Changer le statut</div>
         <div class="flex flex-col gap-2">
             ${options.map(opt => `
-                <button onclick="execChangeStatus('${pid}', '${opt}')" 
-                        class="p-4 border-2 border-black font-black uppercase text-left active:bg-black active:text-white">
-                    ${opt}
+                <button onclick="execChangeStatus('${pid}', '${opt}')"
+                        class="p-4 border-2 border-black font-black uppercase text-left active:bg-black active:text-white ${opt === currentStatus ? 'bg-black text-white' : ''}">
+                    ${_statusLabel(opt)}
                 </button>
             `).join('')}
             <button onclick="this.parentElement.parentElement.parentElement.remove()" class="mt-2 p-2 text-[10px] font-black uppercase opacity-50">Fermer</button>
@@ -597,27 +630,42 @@ function execChangeStatus(pid, newStatus) {
     let comment = "";
     const btn = document.getElementById('btn-status-main');
     const oldStatus = btn ? btn.getAttribute('data-status') : "";
+    const isPro = currentGroupConfig?.isPro;
 
-    // Cas 1 : On annule la commande
-    if (newStatus === "Annulé") {
+    const annuleeLabel = isPro ? PRO_STATUS.ANNULEE : "Annulé";
+    if (newStatus === annuleeLabel) {
         comment = prompt("Motif de l'annulation (obligatoire) :");
         if (!comment || comment.trim() === "") return;
-    } 
-    // Cas 2 : On réactive une commande qui était annulée
-    else if (oldStatus === "Annulé") {
-        comment = prompt("Motif de réactivation (obligatoire car la commande était annulée) :");
+    } else if (oldStatus === annuleeLabel) {
+        comment = prompt("Motif de réactivation (la commande était annulée) :");
         if (!comment || comment.trim() === "") return;
         comment = "🔄 RÉACTIVATION : " + comment;
     }
 
-    socket.emit('update-postit-status', { 
-        postitId: pid, 
-        status: newStatus, 
-        comment: comment 
-    });
-    
+    socket.emit('update-postit-status', { groupId: currentGroupId, postitId: pid, status: newStatus, comment });
+
     const menu = document.getElementById('status-popup');
     if (menu) menu.remove();
+}
+
+// ── Utilitaire : label abrégé d'un statut ────────────────────────────────────
+function _statusLabel(status) {
+    const labels = {
+        'brouillon'                  : 'Brouillon',
+        'validée'                    : 'Validée',
+        'en cours de préparation'    : 'En prépa.',
+        'prête'                      : 'Prête',
+        'prête avec manquant'        : 'Manquant',
+        'ticket de caisse'           : 'Ticket',
+        'terminée'                   : 'Terminée',
+        'annulée'                    : 'Annulée',
+        'En attente'                 : 'Attente',
+        'En préparation'             : 'Prépa.',
+        'En caisse'                  : 'En caisse',
+        'Terminé'                    : 'Terminé',
+        'Annulé'                     : 'Annulé',
+    };
+    return labels[status] || status || '—';
 }
 
 

@@ -400,7 +400,8 @@ function editMessage(id, initialText = null) {
                     const pid = msg.postitId;
                     if (pid && msg.senderName !== '✨ IA' && !msg.isNote) {
                         await _deleteAiNotesForMessage(id, pid);
-                        setTimeout(() => aiAutoExtract(newText, pid, id), 200);
+                        // forceReanalyze=true : libère le verrou serveur car c'est une modification
+                        setTimeout(() => aiAutoExtract(newText, pid, id, true), 200);
                     }
                     refreshView();
                 }

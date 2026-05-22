@@ -2,6 +2,30 @@
 // TUILES POSTITS — rangée horizontale dans le chat
 // ═══════════════════════════════════════════════════════════════════════
 
+// ── Statuts centralisés (source unique de vérité) ────────────────────────────
+const PRO_STATUS = {
+    BROUILLON    : 'brouillon',
+    VALIDEE      : 'validée',
+    EN_PREP      : 'en cours de préparation',
+    PRETE        : 'prête',
+    PRETE_MQ     : 'prête avec manquant',
+    TICKET       : 'ticket de caisse',
+    TERMINEE     : 'terminée',
+    ANNULEE      : 'annulée',
+};
+// Statuts considérés "ouverts" (commande en cours, visible client)
+const PRO_STATUS_OPEN   = [PRO_STATUS.BROUILLON, PRO_STATUS.VALIDEE, PRO_STATUS.EN_PREP,
+                            PRO_STATUS.PRETE, PRO_STATUS.PRETE_MQ, PRO_STATUS.TICKET];
+// Statuts terminaux (commande close)
+const PRO_STATUS_CLOSED = [PRO_STATUS.TERMINEE, PRO_STATUS.ANNULEE];
+// Statuts visibles par l'employé dans la pile (exclu : brouillon par défaut)
+const PRO_STATUS_QUEUE  = [PRO_STATUS.VALIDEE, PRO_STATUS.EN_PREP,
+                            PRO_STATUS.PRETE, PRO_STATUS.PRETE_MQ, PRO_STATUS.TICKET];
+
+// Compatibilité anciens statuts perso (groupes non-pro conservent leur logique)
+const PERSO_STATUS_ACTIVE = ['En attente', 'En préparation', 'brouillon', '', null, undefined];
+const PERSO_STATUS_CLOSED = ['En caisse', 'Terminé', 'Annulé'];
+
 // Postit actuellement sélectionné (id)
 let currentPostitId = null;
 // Cache des postits du groupe courant
@@ -77,12 +101,16 @@ function renderPostitTabs(postits, selectedId) {
     const hiddenWrap = document.getElementById('pintalk-tabs');
     _cachedPostits = postits || [];
 
-    const cfg = currentGroupConfig || {};
-    const isPro = cfg.isPro;
+    const cfg    = currentGroupConfig || {};
+    const isPro  = cfg.isPro;
     const myRole = cfg.myRole || 'owner';
     const isOwnerOrAdmin = myRole === 'owner' || myRole === 'admin';
-    const isEmployee = myRole === 'employe';
-    const canCreate = (myRole === 'owner') && _cachedPostits.length < 4;
+    const isEmployee     = myRole === 'employe';
+    const canCreate = isPro
+        ? (myRole === 'owner' || myRole === 'employe') // employé : selon droit creer_commande (vérifié au submit)
+            ? true
+            : myRole === 'client' && _cachedPostits.filter(p => !PRO_STATUS_CLOSED.includes(p.status)).length < 4
+        : (myRole === 'owner') && _cachedPostits.length < 4;
 
     const tabs = _cachedPostits.map(p => {
         const isActive = p._id === selectedId;
@@ -228,55 +256,6 @@ function selectPostit(postitId) {
 }
 
 // ── Créer un nouveau postit ───────────────────────────────────────────────────
-function uiCreatePostit() {
-    const cfg = currentGroupConfig || {};
-    const isPro = cfg.isPro;
-
-    document.getElementById('postit-modal')?.remove();
-
-    const modalHtml = `
-    <div id="postit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
-        <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);padding:20px;width:100%;max-width:380px;margin-top:60px;">
-            <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:14px;">
-                ${isPro ? '📦 Nouvelle commande' : '💬 Nouveau pintalk'}
-            </h3>
-
-            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">
-                ${isPro ? 'Nom du client *' : 'Nom de la conversation *'}
-            </div>
-            <input type="text" id="pm-name" placeholder="${isPro ? 'Nom du client' : 'Nom'}"
-                   style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;background:white;box-sizing:border-box;">
-
-            ${isPro ? `
-            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Date de retrait *</div>
-            <input type="datetime-local" id="pm-date"
-                   style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;background:white;box-sizing:border-box;">
-
-            <div style="display:flex;gap:8px;margin-bottom:10px;">
-                <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Téléphone</div>
-                    <input type="tel" id="pm-phone" placeholder="06..."
-                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
-                </div>
-                <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">Email</div>
-                    <input type="email" id="pm-email" placeholder="email@..."
-                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;background:white;box-sizing:border-box;">
-                </div>
-            </div>` : ''}
-
-            <div style="display:flex;gap:8px;margin-top:14px;">
-                <button onclick="document.getElementById('postit-modal').remove()"
-                        style="flex:1;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Annuler</button>
-                <button onclick="submitCreatePostit()"
-                        style="flex:1;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">Créer</button>
-            </div>
-        </div>
-    </div>`;
-
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    setTimeout(() => document.getElementById('pm-name')?.focus(), 100);
-}
 
 function uiCreatePostit() {
     const cfg = currentGroupConfig || {};
@@ -336,7 +315,24 @@ async function submitCreatePostit() {
     const deviceId = selDev?.value;
     if (!deviceId) return alert('Rayon introuvable, rechargez la page.');
 
-    const isPro = currentGroupConfig?.isPro;
+    const isPro   = currentGroupConfig?.isPro;
+    const myRole  = currentGroupConfig?.myRole || 'owner';
+
+    // ── Limite client pro : max 4 commandes ouvertes ──────────────────────────
+    if (isPro && myRole === 'client') {
+        const openCount = _cachedPostits.filter(p => !PRO_STATUS_CLOSED.includes(p.status)).length;
+        if (openCount >= 4) {
+            return alert('Vous avez déjà 4 commandes ouvertes. Veuillez attendre qu\'une commande soit terminée avant d\'en créer une nouvelle.');
+        }
+    }
+    // ── Droit de création pour un employé ─────────────────────────────────────
+    if (isPro && myRole === 'employe') {
+        const myDroits = currentGroupConfig?.myDroits || [];
+        if (!myDroits.includes('creer_commande')) {
+            return alert('Vous n\'avez pas le droit de créer des commandes.');
+        }
+    }
+
     const pickupDate = isPro
         ? (document.getElementById('pm-date')?.value || new Date().toISOString())
         : new Date().toISOString();
@@ -775,7 +771,15 @@ async function loadGroupData(groupId, forcePostitId = null) {
         updateVisualHeader();
         return;
     }
-    if (groupId !== currentGroupId) { currentGroupId = groupId; localStorage.setItem('currentGroupId', groupId); }
+    if (groupId !== currentGroupId) {
+        currentGroupId = groupId;
+        localStorage.setItem('currentGroupId', groupId);
+        // Rejoindre la room socket du groupe pour recevoir uniquement
+        // les messages de ce groupe (évite le broadcast global)
+        if (typeof socket !== 'undefined' && socket) {
+            socket.emit('join-group', groupId);
+        }
+    }
 
     try {
         // 1. Charger les rayons
@@ -808,11 +812,41 @@ async function loadGroupData(groupId, forcePostitId = null) {
 
             // Appliquer le filtre de statut
             let postits = [...allPostits];
-            if (typeof showFinished !== 'undefined') {
-                if (showFinished) {
-                    postits = postits.filter(p => p.status === "En caisse" || p.status === "Terminé" || p.status === "Annulé");
+            const isPro = currentGroupConfig?.isPro;
+            const myRole = currentGroupConfig?.myRole || 'owner';
+
+            if (isPro) {
+                // ── Vue CLIENT pro : uniquement ses propres commandes non terminées ──
+                if (myRole === 'client') {
+                    const userEmail = currentUser?.email || '';
+                    postits = postits.filter(p => {
+                        if (PRO_STATUS_CLOSED.includes(p.status)) return false;
+                        // Ses commandes : ownerEmail ou dans allowedEmails
+                        return p.ownerEmail === userEmail ||
+                               (p.allowedEmails && p.allowedEmails.includes(userEmail));
+                    });
                 } else {
-                    postits = postits.filter(p => p.status === "En attente" || p.status === "En préparation" || p.status === "brouillon" || !p.status || p.status === "");
+                    // ── Vue EMPLOYÉ / PROPRIO : pile complète filtrée ──
+                    if (showFinished) {
+                        postits = postits.filter(p => PRO_STATUS_CLOSED.includes(p.status));
+                    } else {
+                        const myDroits = currentGroupConfig?.myDroits || [];
+                        const canSeeDraft = (myRole === 'owner') || myDroits.includes('voir_brouillons');
+                        postits = postits.filter(p => {
+                            if (PRO_STATUS_CLOSED.includes(p.status)) return false;
+                            if (p.status === PRO_STATUS.BROUILLON && !canSeeDraft) return false;
+                            return true;
+                        });
+                    }
+                }
+            } else {
+                // ── Groupes PERSO — comportement original ──
+                if (typeof showFinished !== 'undefined') {
+                    if (showFinished) {
+                        postits = postits.filter(p => PERSO_STATUS_CLOSED.includes(p.status));
+                    } else {
+                        postits = postits.filter(p => PERSO_STATUS_ACTIVE.includes(p.status));
+                    }
                 }
             }
 
@@ -843,9 +877,10 @@ async function loadGroupData(groupId, forcePostitId = null) {
         // 3. Mise à jour header et vue
         updateVisualHeader();
         if (typeof refreshView === 'function') refreshView();
-        // Charger l'historique du postit sélectionné
-        if (socket && currentGroupId) {
-            socket.emit('get-history', { groupId, postitId: currentPostitId || undefined });
+        // Charger l'historique UNIQUEMENT si un pintalk est sélectionné
+        // (évite de bombarder le serveur à chaque changement de groupe)
+        if (socket && currentGroupId && currentPostitId) {
+            socket.emit('get-history', { groupId, postitId: currentPostitId });
         }
         if (typeof updateBadge === 'function') updateBadge();
 
@@ -878,20 +913,27 @@ function updateVisualHeader() {
 
 // Met à jour l'input date quand on sélectionne un pintalk déjà créé
 function filterPostitsByStatus(postits) {
+    const isPro = currentGroupConfig?.isPro;
+    if (isPro) {
+        if (showFinished) {
+            return postits.filter(p => PRO_STATUS_CLOSED.includes(p.status));
+        } else {
+            // Vue employé/proprio : tout sauf terminé/annulé (brouillons inclus selon droit)
+            const myRole = currentGroupConfig?.myRole || 'client';
+            const myDroits = currentGroupConfig?.myDroits || [];
+            const canSeeDraft = (myRole === 'owner') || myDroits.includes('voir_brouillons');
+            return postits.filter(p => {
+                if (PRO_STATUS_CLOSED.includes(p.status)) return false;
+                if (p.status === PRO_STATUS.BROUILLON && !canSeeDraft) return false;
+                return true;
+            });
+        }
+    }
+    // Groupes perso — comportement original
     if (showFinished) {
-        // Mode ARCHIVES : Uniquement les états terminaux
-        return postits.filter(p => 
-            p.status === "En caisse" || 
-            p.status === "Terminé" || 
-            p.status === "Annulé"
-        );
+        return postits.filter(p => PERSO_STATUS_CLOSED.includes(p.status));
     } else {
-        // Mode ACTIF (par défaut) : Uniquement ce qui est à faire
-        return postits.filter(p => 
-            p.status === "En attente" || 
-            p.status === "En préparation" || 
-            !p.status // Gère aussi les nouveaux pintalks sans statut
-        );
+        return postits.filter(p => PERSO_STATUS_ACTIVE.includes(p.status));
     }
 }
 
@@ -938,20 +980,26 @@ async function loadPostits(deviceId) {
         if (stDev) stDev.innerText = deviceId.substring(0, 6); // Affiche un court ID ou le nom
 
         // 2. LOGIQUE DE FILTRAGE (Flux Actif vs Archives)
-        if (showFinished) {
-            // Mode ARCHIVES : Uniquement les états terminaux
-            postits = postits.filter(p => 
-                p.status === "En caisse" || 
-                p.status === "Terminé" || 
-                p.status === "Annulé"
-            );
+        const isPro = currentGroupConfig?.isPro;
+        if (isPro) {
+            if (showFinished) {
+                postits = postits.filter(p => PRO_STATUS_CLOSED.includes(p.status));
+            } else {
+                const myRole = currentGroupConfig?.myRole || 'owner';
+                const myDroits = currentGroupConfig?.myDroits || [];
+                const canSeeDraft = (myRole === 'owner') || myDroits.includes('voir_brouillons');
+                postits = postits.filter(p => {
+                    if (PRO_STATUS_CLOSED.includes(p.status)) return false;
+                    if (p.status === PRO_STATUS.BROUILLON && !canSeeDraft) return false;
+                    return true;
+                });
+            }
         } else {
-            // Mode ACTIF (Par défaut) : Uniquement ce qui est en cours
-            postits = postits.filter(p => 
-                p.status === "En attente" || 
-                p.status === "En préparation" || 
-                !p.status || p.status === ""
-            );
+            if (showFinished) {
+                postits = postits.filter(p => PERSO_STATUS_CLOSED.includes(p.status));
+            } else {
+                postits = postits.filter(p => PERSO_STATUS_ACTIVE.includes(p.status));
+            }
         }
 
         // 3. REMPLISSAGE DU SÉLECTEUR

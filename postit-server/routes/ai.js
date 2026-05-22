@@ -8,295 +8,437 @@ const {
     _isDictionaryAdmin, _resolveUserLang,
     _refreshAiDictionaryCache, _ensureAiDictionaryCacheFresh,
     _normalizeTextWithAiDictionary, _aiDictCache,
-    _isQuestion, _splitByArticles, _fallbackExtract,
+    _isQuestion, _isHardNegation, _fallbackExtract,
     _cleanExtractedItemText, _normalizeProductKey, _isLikelyProductText,
     _mergeStandaloneQuantities,
 } = require('../helpers/ai');
 const { AiDictionaryEntry } = require('../models');
 
+// ── Cache résultats Gemini (TTL 30min, max 500 entrées) ───────────────────────
+const _geminiCache  = new Map();
+const _CACHE_TTL_MS = 30 * 60 * 1000;
+
+function _cacheKey(text, lang) {
+    return lang + '::' + text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function _cacheGet(text, lang) {
+    const e = _geminiCache.get(_cacheKey(text, lang));
+    if (!e) return null;
+    if (Date.now() > e.expiresAt) { _geminiCache.delete(_cacheKey(text, lang)); return null; }
+    return e.result;
+}
+function _cacheSet(text, lang, result) {
+    if (_geminiCache.size >= 500) _geminiCache.delete(_geminiCache.keys().next().value);
+    _geminiCache.set(_cacheKey(text, lang), { result, expiresAt: Date.now() + _CACHE_TTL_MS });
+}
+
+// ── Rate-limiter simple : délai minimum entre appels + blocage quota ──────────
+// Pas de file chaînée (évite la boucle infinie de promesses)
+// Si Gemini est en quota 429, _geminiBlockedUntil est positionné dans le futur
+// et tout appel pendant ce délai retourne null immédiatement sans appeler Gemini
+const _GEMINI_MIN_INTERVAL_MS = parseInt(process.env.GEMINI_MIN_INTERVAL_MS || '4500');
+let   _lastGeminiCallAt    = 0;
+let   _geminiBlockedUntil  = 0; // timestamp jusqu'auquel Gemini est bloqué (quota)
+
+function _isGeminiBlocked() {
+    return Date.now() < _geminiBlockedUntil;
+}
+
+function _blockGemini(seconds) {
+    _geminiBlockedUntil = Date.now() + (seconds * 1000);
+    console.warn(`[Gemini] Bloqué pendant ${seconds}s (quota)`);
+}
+
+async function _respectRateLimit() {
+    const waited = Date.now() - _lastGeminiCallAt;
+    const delay  = Math.max(0, _GEMINI_MIN_INTERVAL_MS - waited);
+    if (delay > 0) {
+        console.log(`[Gemini] Rate-limit attente ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+    }
+    _lastGeminiCallAt = Date.now();
+}
+
+
 // ── Extraction multi-items via Gemini ─────────────────────────────────────────
 router.post('/extract-multi', authenticateToken, async (req, res) => {
     try {
         const { text: rawText, sourceMessageId } = req.body;
-        console.log('[EXTRACT-MULTI] Reçu:', JSON.stringify(rawText).substring(0, 100), '| srcMsgId:', sourceMessageId || 'AUCUN');
-        if (!rawText || rawText.length < 2) return res.status(400).send('Texte vide.');
+        if (!rawText || rawText.trim().length < 2) {
+            return res.json({ items: [], source: 'empty', understood: true });
+        }
+
+        const userEmail = req.user?.email || '';
+        const lang      = await _resolveUserLang(userEmail);
+
+        if (sourceMessageId && _aiExtractLock.has(sourceMessageId)) {
+            // Si forceReanalyze=true (message modifié) → libérer le verrou et continuer
+            if (req.body.forceReanalyze) {
+                console.log('[AI] Ré-analyse forcée (message modifié):', sourceMessageId);
+                _aiExtractLock.delete(sourceMessageId);
+            } else {
+                console.log('[AI] Déjà en cours ou récemment traité:', sourceMessageId);
+                return res.json({ items: [], source: 'locked', understood: true });
+            }
+        }
         if (sourceMessageId) {
-            if (_aiExtractLock.has(sourceMessageId)) {
-                console.warn('[EXTRACT-MULTI] ⛔ Doublon bloqué pour:', sourceMessageId);
-                return res.status(429).json({ items: [], source: 'duplicate_blocked' });
-            }
             _aiExtractLock.add(sourceMessageId);
-            setTimeout(() => _aiExtractLock.delete(sourceMessageId), 15000);
+            // Libérer le verrou après 10 minutes max (garde-fou)
+            setTimeout(() => _aiExtractLock.delete(sourceMessageId), 10 * 60 * 1000);
         }
 
-        const userEmail     = req.user?.email || '';
-        const userLang      = await _resolveUserLang(userEmail);
-        const text          = rawText.replace(/(\d+[.,]?\d*)\s+(g|gr|kg|ml|cl|dl|l)\b/gi, '$1$2');
-        const normalizedText = await _normalizeTextWithAiDictionary(text, userEmail, userLang);
-        const geminiKey     = process.env.GEMINI_API_KEY;
-        const isQuestion    = _isQuestion(normalizedText);
-        const preSplit      = isQuestion ? null : _splitByArticles(normalizedText);
-
-        // Sans Gemini → fallback uniquement
-        if (!geminiKey) {
-            const parts = (preSplit && preSplit.length > 1) ? preSplit : _fallbackExtract(normalizedText);
-            const uniq = new Set();
-            const items = parts.map(t => {
-                const isWord = t.startsWith('__WORD__');
-                const txtRaw = isWord ? t.slice(8) : t.trim();
-                const txt = _cleanExtractedItemText(txtRaw);
-                const key = _normalizeProductKey(txt);
-                if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
-                uniq.add(key);
-                return { text: txt, uncertain: isWord || isQuestion };
-            }).filter(Boolean);
-            console.log('[FALLBACK] Items:', JSON.stringify(items));
-            return res.json({ items, source: 'fallback' });
-        }
-
-        // Bypass Gemini si pré-split concluant et texte simple
-        if (preSplit && preSplit.length > 1 && !isQuestion &&
-            !normalizedText.match(/faudrait|devrait|acheter|prendre|pense|oublie|peut.être/i)) {
-            const uniq = new Set();
-            const items = preSplit.map(t => {
-                const txt = _cleanExtractedItemText(t.trim());
-                const key = _normalizeProductKey(txt);
-                if (!txt || !key || uniq.has(key)) return null;
-                uniq.add(key);
-                return { text: txt, uncertain: false };
-            }).filter(Boolean);
-            console.log('[PRE-SPLIT] Bypass Gemini, items:', JSON.stringify(items));
-            return res.json({ items, source: 'presplit' });
-        }
-
-        const safeText = normalizedText.replace(/"/g, "'").substring(0, 300);
-        const systemPrompt = `Tu es un extracteur logistique de liste de courses et de taches. Tu identifies les produits mentionnes dans tout message : affirmation, question ou suggestion. IMPORTANT : le texte peut provenir d'une transcription vocale automatique et contenir des erreurs phonetiques ou orthographiques (ex: "biscote" pour "biscottes", "yaour" pour "yaourt", "shampoin" pour "shampoing"). Corrige ces erreurs et extrais le produit correct. Tu reponds UNIQUEMENT avec du JSON valide, jamais avec du texte libre.`;
-        const fewShotPrompt = `EXEMPLES DE TRANSFORMATION (few-shot) :
-
-Message: "biscottes"
-Reponse: {"items":[{"text":"biscottes","uncertain":false}]}
-
-Message: "du pain du beurre"
-Reponse: {"items":[{"text":"pain","uncertain":false},{"text":"beurre","uncertain":false}]}
-
-Message: "prends du pain et 3 croissants"
-Reponse: {"items":[{"text":"pain","uncertain":false},{"text":"3 croissants","uncertain":false}]}
-
-Message: "Il nous faudrait des pommes non ?"
-Reponse: {"items":[{"text":"pommes","uncertain":true}]}
-
-Message: "Ne faudrait-il pas prendre du pain et du beurre ?"
-Reponse: {"items":[{"text":"pain","uncertain":true},{"text":"beurre","uncertain":true}]}
-
-Message: "300g viande hachee, 2 steaks, un roti de veau"
-Reponse: {"items":[{"text":"300g viande hachee","uncertain":false},{"text":"2 steaks","uncertain":false},{"text":"roti de veau","uncertain":false}]}
-
-REGLES CRITIQUES :
-- Chaque produit = un item separe, meme sans virgule ni ponctuation
-- "du/de la/des/le/la/les" avant un produit = nouveau produit distinct
-- uncertain:false = affirmation, liste directe, mot seul
-- uncertain:true = question, suggestion, doute ("faudrait", "devrait", "peut-etre", "?")
-- Supprimer les articles (du, de la, des, le, la) dans le champ text
-- Conserver les quantites (3, 300g, un, une, deux...) dans le champ text
-- Ne JAMAIS retourner items vide
-
-MESSAGE A ANALYSER: "${safeText}"
-Reponse JSON:`;
-
-        const gRes = await fetch(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + geminiKey,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    systemInstruction: { parts: [{ text: systemPrompt }] },
-                    contents: [{ role: 'user', parts: [{ text: fewShotPrompt }] }],
-                    generationConfig: { maxOutputTokens: 300, temperature: 0.1, responseMimeType: 'application/json' }
-                })
-            }
-        );
-
-        if (!gRes.ok) {
-            const errText = await gRes.text();
-            console.error('[GEMINI] Erreur API:', gRes.status, errText.substring(0, 100));
-            const simple = _fallbackExtract(normalizedText).map(t => ({ text: t, uncertain: false }));
-            return res.json({ items: simple, source: 'fallback' });
-        }
-
-        const gData = await gRes.json();
-        const raw = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
-
-        let items = [];
         try {
-            const clean = raw.replace(/```json|```/g, '').trim();
-            const parsed = JSON.parse(clean);
-            const arr = Array.isArray(parsed) ? parsed : (parsed.items || []);
-            const uniq = new Set();
-            items = arr
-                .filter(i => i && typeof i.text === 'string' && i.text.trim().length > 1)
-                .map(i => {
-                    const txt = _cleanExtractedItemText(i.text.trim());
-                    const key = _normalizeProductKey(txt);
-                    if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
-                    uniq.add(key);
-                    return { text: txt, uncertain: !!i.uncertain };
-                }).filter(Boolean);
-        } catch(e) {
-            console.warn('[GEMINI] JSON parse failed:', e.message);
-            const uniq = new Set();
-            items = _fallbackExtract(normalizedText).map(t => {
-                const txt = _cleanExtractedItemText(t.trim());
-                const key = _normalizeProductKey(txt);
-                if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
-                uniq.add(key);
-                return { text: txt, uncertain: false };
-            }).filter(Boolean);
+            const normalizedText = await _normalizeTextWithAiDictionary(rawText.trim(), userEmail, lang);
+            const isQuestion     = _isQuestion(normalizedText);
+            const isHardNeg      = _isHardNegation(normalizedText);
+
+            if (isHardNeg && !isQuestion) {
+                return res.json({ items: [], source: 'hard-negation', understood: true });
+            }
+
+            const geminiKey = process.env.GEMINI_API_KEY;
+            let geminiItems = null;
+            let source = 'gemini';
+            let geminiUnderstood = true; // ce que Gemini a déclaré
+
+            if (geminiKey) {
+                // 1. Cache
+                const cached = _cacheGet(normalizedText, lang);
+                if (cached) {
+                    console.log('[Gemini] Cache hit');
+                    geminiItems      = cached.items;
+                    geminiUnderstood = cached.understood;
+                    source           = 'gemini-cache';
+                } else if (_isGeminiBlocked()) {
+                    // Quota dépassé : ne pas appeler Gemini, retourner null directement
+                    const remaining = Math.ceil((_geminiBlockedUntil - Date.now()) / 1000);
+                    console.warn(`[Gemini] Bloqué encore ${remaining}s — appel annulé`);
+                    geminiItems = null;
+                } else {
+                    // Appel Gemini avec délai minimum entre requêtes
+                    await _respectRateLimit();
+                    const result = await _callGeminiWithMeta(normalizedText, lang, geminiKey);
+                    geminiItems      = result.items;
+                    geminiUnderstood = result.understood;
+                    source           = result.source;
+                    // Mettre en cache si réponse valide
+                    if (geminiItems !== null) {
+                        _cacheSet(normalizedText, lang, { items: geminiItems, understood: geminiUnderstood });
+                    }
+                }
+            }
+
+            // Gemini indisponible (null = erreur réseau/timeout/quota)
+            if (geminiItems === null) {
+                console.warn('[AI] Gemini indisponible — fallback NLP');
+                // Fallback NLP : extraction par règles + filtre strict
+                // Bien meilleur que le découpage mécanique d'avant :
+                // utilise le dico + _splitByArticles + _isLikelyProductText
+                const fallbackRaw = _fallbackExtract(normalizedText) || [];
+                const fallbackItems = fallbackRaw
+                    .map(t => ({
+                        text: _cleanExtractedItemText(String(t).replace(/^__WORD__/, '')),
+                        uncertain: isQuestion, // si phrase interrogative → uncertain
+                    }))
+                    .filter(item =>
+                        item.text && item.text.length >= 2 &&
+                        _isLikelyProductText(item.text) &&
+                        _isDefinitelyAProduct(item.text)
+                    );
+                // Si le fallback ne trouve rien de propre → bulle marquée ⚠️
+                if (fallbackItems.length === 0) {
+                    return res.json({ items: [], source: 'fallback-empty', understood: _isLikelyPureConversation(normalizedText) });
+                }
+                return res.json({ items: fallbackItems, source: 'fallback-nlp', understood: true });
+            }
+
+            // Post-traitement : nettoyage + filtre de sécurité
+            // (au cas où Gemini retournerait quand même des mots grammaticaux)
+            let items = geminiItems
+                .map(item => {
+                    const raw  = typeof item === 'string' ? item : (item?.text || '');
+                    const text = _cleanExtractedItemText(raw);
+                    const uncertain = typeof item === 'object' ? !!item.uncertain : false;
+                    return { text, uncertain: uncertain || isQuestion };
+                })
+                .filter(item => {
+                    if (!item.text || item.text.length < 2) return false;
+                    // Filtre de sécurité : rejeter les mots clairement non-produits
+                    // même si Gemini les a retournés (cas de régression)
+                    return _isDefinitelyAProduct(item.text);
+                });
+
+            items = _mergeStandaloneQuantities(items);
+
+            const seen = new Set();
+            items = items.filter(item => {
+                const k = _normalizeProductKey(item.text);
+                if (!k || seen.has(k)) return false;
+                seen.add(k);
+                return true;
+            });
+
+            // understood = ce que Gemini a déclaré, affiné par le résultat réel
+            const understood = items.length > 0
+                ? true
+                : (geminiUnderstood ? _isLikelyPureConversation(normalizedText) : false);
+
+            return res.json({ items, source, understood });
+
+        } finally {
+            if (sourceMessageId) _aiExtractLock.delete(sourceMessageId);
         }
 
-        // Dernier filet : si vide → fallback
-        if (items.length === 0 && normalizedText.trim().length > 1) {
-            const fb = _fallbackExtract(normalizedText);
-            const uniq = new Set();
-            items = fb.length > 0
-                ? fb.map(t => {
-                    const txt = _cleanExtractedItemText(t);
-                    const key = _normalizeProductKey(txt);
-                    if (!txt || !key || uniq.has(key) || !_isLikelyProductText(txt)) return null;
-                    uniq.add(key);
-                    return { text: txt, uncertain: true };
-                }).filter(Boolean)
-                : (() => {
-                    const txt = _cleanExtractedItemText(normalizedText.trim().substring(0, 60));
-                    return _isLikelyProductText(txt) ? [{ text: txt, uncertain: true }] : [];
-                })();
-        }
-
-        items = _mergeStandaloneQuantities(items);
-        if (!isQuestion) items = items.map(it => it ? { ...it, uncertain: false } : it).filter(Boolean);
-
-        console.log('[GEMINI] ' + items.length + ' items extraits de "' + normalizedText.substring(0, 50) + '"');
-        res.json({ items, source: 'gemini' });
-
-    } catch(err) {
-        console.error('[AI EXTRACT-MULTI]', err.message);
-        const simple = _fallbackExtract(req.body.text || '').map(t => ({ text: t, uncertain: false }));
-        res.json({ items: simple, source: 'fallback' });
+    } catch (err) {
+        console.error('[AI extract-multi]', err.message);
+        res.status(500).json({ items: [], source: 'error', understood: false, error: err.message });
     }
 });
 
-// ── Extraction simple (single item) ──────────────────────────────────────────
-router.post('/extract', authenticateToken, async (req, res) => {
+// ── Appel Gemini 2.0 Flash ────────────────────────────────────────────────────
+// Retourne { items, understood, source }
+// items = null si erreur réseau/timeout (pas de réponse du tout)
+// items = [] si Gemini répond mais ne trouve aucun produit
+async function _callGeminiWithMeta(text, lang, apiKey) {
+    const UNAVAILABLE = { items: null, understood: true, source: 'gemini-error' };
+    const langLabel = { fr:'français', en:'english', es:'español', de:'Deutsch', it:'italiano' }[lang] || 'français';
+
+    // ── Prompt compact (≈ 300 tokens vs 600 avant) ────────────────────────────
+    const systemInstruction = `Extracteur de produits pour listes de courses/commandes. Langue: ${langLabel}.
+RÈGLES : (1) Retourner UNIQUEMENT les noms de produits réels du message — jamais les verbes, pronoms, mots interrogatifs, articles seuls. (2) Comprendre le sens global : "je vais prendre du pain" → produit="pain". (3) Mots composés groupés : "steak haché" → UN item. (4) Doute/question/conditionnel → uncertain=true. (5) Négation ferme → ne pas inclure le produit. (6) Aucun produit identifiable → items=[] understood=false.
+FORMAT JSON strict : {"items":[{"text":"produit","uncertain":false}],"understood":true}`;
+
+    // ── 8 few-shots essentiels (≈ 400 tokens vs 900 avant) ───────────────────
+    const fewShots = [
+        // Plusieurs produits + verbe à ignorer
+        { role:'user',  parts:[{text:'il me faut du pain, des oeufs et du beurre'}] },
+        { role:'model', parts:[{text:'{"items":[{"text":"pain","uncertain":false},{"text":"oeufs","uncertain":false},{"text":"beurre","uncertain":false}],"understood":true}'}] },
+        // Verbe + préposition à ignorer → seul le produit
+        { role:'user',  parts:[{text:'je vais prendre du lait'}] },
+        { role:'model', parts:[{text:'{"items":[{"text":"lait","uncertain":false}],"understood":true}'}] },
+        // Question/suggestion → uncertain
+        { role:'user',  parts:[{text:'pourquoi pas prendre du pain et est-ce qu il faut des yaourts ?'}] },
+        { role:'model', parts:[{text:'{"items":[{"text":"pain","uncertain":true},{"text":"yaourts","uncertain":true}],"understood":true}'}] },
+        // Conditionnel rhétorique → uncertain
+        { role:'user',  parts:[{text:'il ne faudrait pas du jambon ?'}] },
+        { role:'model', parts:[{text:'{"items":[{"text":"jambon","uncertain":true}],"understood":true}'}] },
+        // Mot composé sans tiret → groupé
+        { role:'user',  parts:[{text:'des steaks haches et des pommes de terre stp'}] },
+        { role:'model', parts:[{text:'{"items":[{"text":"steaks haches","uncertain":false},{"text":"pommes de terre","uncertain":false}],"understood":true}'}] },
+        // Négation ferme → items vides
+        { role:'user',  parts:[{text:'non pas de lardons'}] },
+        { role:'model', parts:[{text:'{"items":[],"understood":true}'}] },
+        // Quantité + produit
+        { role:'user',  parts:[{text:'2 kg de tomates et 500g de farine'}] },
+        { role:'model', parts:[{text:'{"items":[{"text":"2 kg tomates","uncertain":false},{"text":"500g farine","uncertain":false}],"understood":true}'}] },
+        // Conversation pure → items vides, understood false
+        { role:'user',  parts:[{text:'bonjour je serai la a 18h ok merci'}] },
+        { role:'model', parts:[{text:'{"items":[],"understood":false}'}] },
+    ];
+
+    const body = {
+        system_instruction: { parts: [{ text: systemInstruction }] },
+        contents: [...fewShots, { role: 'user', parts: [{ text }] }],
+        generationConfig: {
+            temperature: 0.0,
+            maxOutputTokens: 256,
+            responseMimeType: 'application/json',
+        },
+        safetySettings: [
+            { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+        ],
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
     try {
-        const { text } = req.body;
-        if (!text || text.length < 2) return res.status(400).send('Texte vide.');
-        const geminiKey = process.env.GEMINI_API_KEY;
-        if (!geminiKey) {
-            const simple = text.replace(/^(pense à|n'oublie pas de|il faut|acheter|prendre|ramener)\s+/i, '').trim();
-            return res.json({ extracted: simple, source: 'fallback' });
-        }
-        const prompt = `Tu es un assistant qui extrait des tâches ou éléments concrets d'un message.
-Règles strictes :
-- Réponds UNIQUEMENT avec le texte de l'élément extrait, rien d'autre
-- Inclure les quantités si présentes (ex: "3 steaks hachés", "500g de farine")
-- Si aucun élément concret : réponds exactement AUCUN
-- Pas d'explication, pas de ponctuation finale, juste l'item en minuscules
-Message : "${text.replace(/"/g, "'")}"`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(8000),
+        });
 
-        const geminiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 60, temperature: 0.1 } }) }
-        );
-        if (!geminiRes.ok) {
-            const simple = text.replace(/^(pense à|acheter|prendre|il faut)\s+/i,'').trim();
-            return res.json({ extracted: simple, source: 'fallback' });
+        if (!resp.ok) {
+            console.warn('[Gemini] HTTP', resp.status);
+            // Gérer le 429 : bloquer IMMÉDIATEMENT les appels suivants
+            if (resp.status === 429) {
+                const errBody = await resp.json().catch(() => ({}));
+                const retryInfo = (errBody?.error?.details || [])
+                    .find(d => d['@type'] && d['@type'].includes('RetryInfo'));
+                const rawDelay = retryInfo?.retryDelay || '60s';
+                const delaySec = Math.max(60, Math.ceil(parseFloat(rawDelay) || 60) + 5);
+                _blockGemini(delaySec);
+            }
+            return UNAVAILABLE;
         }
-        const geminiData = await geminiRes.json();
-        const extracted = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (!extracted || extracted === 'AUCUN') return res.json({ extracted: null });
-        console.log(`[GEMINI] Extrait : "${extracted}" depuis "${text.substring(0,40)}..."`);
-        res.json({ extracted, source: 'gemini' });
-    } catch(err) {
-        const simple = req.body.text?.replace(/^(pense à|acheter|prendre|il faut)\s+/i,'').trim();
-        res.json({ extracted: simple || null, source: 'fallback' });
+
+        const data = await resp.json();
+        const raw  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (!raw) return UNAVAILABLE;
+
+        let parsed;
+        try {
+            const clean = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+            parsed = JSON.parse(clean);
+        } catch (e) {
+            console.warn('[Gemini] Parse JSON error:', e.message);
+            return UNAVAILABLE;
+        }
+
+        if (!Array.isArray(parsed?.items)) return UNAVAILABLE;
+
+        const items = parsed.items
+            .filter(i => i && typeof i.text === 'string' && i.text.trim().length > 0)
+            .map(i => ({ text: i.text.trim(), uncertain: !!i.uncertain }));
+
+        const understood = parsed.understood !== false;
+        console.log(`[Gemini] "${text.substring(0,50)}" → ${items.length} produit(s)`);
+        return { items, understood, source: 'gemini' };
+
+    } catch (err) {
+        if (err.name === 'TimeoutError') console.warn('[Gemini] Timeout');
+        else console.warn('[Gemini]', err.message);
+        return UNAVAILABLE;
     }
-});
+}
 
-// ── Dictionnaire IA personnel ─────────────────────────────────────────────────
+// ── Heuristique conversation pure ─────────────────────────────────────────────
+function _isLikelyPureConversation(text) {
+    const t = String(text || '').toLowerCase().trim()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (!t) return true;
+    // Salutations et réponses courtes explicites
+    if (/^(bonjour|bonsoir|salut|coucou|hello|hi|hey|ok|oui|non|merci|super|parfait|d.accord|vu|yes|no|yep|nope|ca marche|nickel|top|cool|ok merci|a bientot|a plus|bonne journee|bonne soiree|bisous|bises|a tout|a toute|on se voit|a demain)[\s!.,?]*$/i.test(t)) return true;
+    // Tokens purement temporels / numériques → pas des produits
+    // ex: "18h", "14h30", "lundi", "demain", "2024"
+    const reTime = /^\d{1,2}h\d{0,2}$|^\d{4}$|^(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|demain|aujourd|hier|matin|soir|midi|minuit|semaine|mois|janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)$/;
+    // Phrases dont tous les tokens non-triviaux sont grammaticaux ou temporels
+    const tokens = t.split(/\s+/).filter(w => w.length > 2 &&
+        !reTime.test(w) &&
+        !/^(je|tu|il|elle|on|nous|vous|ils|que|qui|dont|ou|et|mais|donc|or|ni|car|si|de|du|des|le|la|les|un|une|est|sont|suis|va|vais|sera|serai|pas|par|pour|sur|sous|avec|sans|dans|vers|chez|lors|puis|aussi|tres|plus|bien|mal|tout|tous|cette|cet|ces|mon|ton|son|nos|vos|ses|moi|toi|lui|eux|elles|etre|avoir|faire|aller|venir|voir|savoir|falloir|vouloir|pouvoir|devoir)$/.test(w));
+    return tokens.length === 0;
+}
+
+// ── Filtre de sécurité post-Gemini ───────────────────────────────────────────
+// Dernier rempart contre les mots grammaticaux que Gemini retournerait par erreur.
+// Moins strict que _isLikelyProductText (helpers) car Gemini est déjà fiable,
+// mais on rejette quand même les cas évidents.
+function _isDefinitelyAProduct(text) {
+    if (!text || text.trim().length < 2) return false;
+    const t = text.trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/['']/g, ' ').replace(/[^a-z0-9\s-]/g, ' ')
+        .replace(/\s+/g, ' ').trim();
+
+    // Mots interrogatifs, pronoms, verbes, salutations → jamais un produit
+    const neverProduct = new Set([
+        'pourquoi','comment','quand','qui','que','quoi','dont','ou','combien',
+        'lequel','laquelle','lesquels','lesquelles',
+        'est','ce','qu','il','elle','on','nous','vous','ils','elles',
+        'je','tu','me','te','se','y','en',
+        'faut','faudrait','devrait','pourrait','serait','voudrait',
+        'prendre','acheter','ajouter','ramener','mettre','faire','aller',
+        'vais','vas','va','veux','veut','dois','doit','peux','peut',
+        'pas','non','oui','ok','okay','ouais','yep','yes','nope','no',
+        'merci','stp','svp','please',
+        'de','du','des','le','la','les','un','une','et','ou','mais',
+        // salutations et réponses conversationnelles
+        'bonjour','bonsoir','salut','coucou','hello','hi','hey',
+        'super','nickel','parfait','top','cool','vu',
+    ]);
+
+    // Rejet si c'est exactement un mot-interdit
+    if (neverProduct.has(t)) return false;
+
+    // Rejet si le texte est constitué UNIQUEMENT de mots interdits
+    const words = t.split(/\s+/).filter(Boolean);
+    if (words.length > 0 && words.every(w => neverProduct.has(w))) return false;
+
+    // Rejet si commence par un mot interrogatif ou pronom
+    const firstWord = words[0] || '';
+    const startsWithJunk = new Set(['pourquoi','comment','quand','est','ce','qu','il','elle','faut']);
+    if (startsWithJunk.has(firstWord) && words.length <= 2) return false;
+
+    // Nombre seul sans unité → pas un produit
+    if (/^\d+$/.test(t)) return false;
+
+    return true;
+}
+
+// ── Dictionnaire ──────────────────────────────────────────────────────────────
+
 router.get('/dictionary', authenticateToken, async (req, res) => {
     try {
         await _ensureAiDictionaryCacheFresh();
-        const userEmail = String(req.user?.email || '').toLowerCase();
-        const userLang  = await _resolveUserLang(userEmail);
-        const lang      = String(req.query.lang || userLang || 'fr').toLowerCase();
-        const includeGlobal = req.query.scope !== 'user';
-        const includeUser   = req.query.scope !== 'global';
-        const entries = [];
-        if (includeGlobal) entries.push(..._aiDictCache.entries.filter(e => e.scope === 'global' && (e.lang === lang || e.lang === 'all')));
-        if (includeUser && userEmail) entries.push(...(_aiDictCache.byUser.get(userEmail) || []).filter(e => e.lang === lang || e.lang === 'all'));
-        res.json({ items: entries.map(e => ({ _id: e.id, phrase: e.phrase, normalized: e.normalized, lang: e.lang, category: e.category, scope: e.scope, ownerEmail: e.ownerEmail })) });
-    } catch (e) { res.status(500).json({ message: 'Erreur lecture dictionnaire IA' }); }
+        const userEmail = req.user.email.toLowerCase();
+        const lang      = String(req.query.lang || 'fr').toLowerCase();
+        const isAdmin   = _isDictionaryAdmin(userEmail);
+
+        let entries = isAdmin
+            ? await AiDictionaryEntry.find({ active: true }).lean()
+            : await AiDictionaryEntry.find({ active: true, $or: [
+                { scope: 'global' },
+                { scope: 'user', ownerEmail: userEmail },
+              ]}).lean();
+
+        if (lang && lang !== 'all') {
+            entries = entries.filter(e => !e.lang || e.lang === lang || e.lang === 'all');
+        }
+
+        res.json(entries.map(e => ({
+            _id: e._id, phrase: e.phrase, normalized: e.normalized,
+            lang: e.lang||'fr', category: e.category||'', scope: e.scope||'user',
+            ownerEmail: e.ownerEmail||'', active: e.active,
+        })));
+    } catch (err) { res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.post('/dictionary', authenticateToken, async (req, res) => {
     try {
-        const phrase = String(req.body?.phrase || '').trim();
-        if (!phrase) return res.status(400).json({ message: 'phrase requise' });
-        const userLang = await _resolveUserLang(req.user?.email || '');
-        const lang = String(req.body?.lang || userLang || 'fr').trim().toLowerCase();
-        if (!/^(fr|en|es|de|it|all)$/.test(lang)) return res.status(400).json({ message: 'lang invalide (fr,en,es,de,it,all)' });
-        const requestedScope = String(req.body?.scope || 'user').toLowerCase();
-        const canGlobal  = _isDictionaryAdmin(req.user?.email);
-        const scope      = (requestedScope === 'global' && canGlobal) ? 'global' : 'user';
-        const ownerEmail = scope === 'user' ? String(req.user?.email || '').toLowerCase() : '';
-        const normalized = _normalizePhraseKey(phrase);
-        if (!normalized) return res.status(400).json({ message: 'phrase invalide' });
-        const doc = await AiDictionaryEntry.create({ phrase, normalized, lang, category: String(req.body?.category || '').trim(), active: req.body?.active !== false, scope, ownerEmail, createdBy: String(req.user?.email || '').toLowerCase() });
-        await _refreshAiDictionaryCache();
-        res.status(201).json({ item: doc });
-    } catch (e) {
-        if (e?.code === 11000) return res.status(409).json({ message: 'Entrée déjà existante' });
-        res.status(500).json({ message: 'Erreur création dictionnaire IA' });
-    }
-});
+        const userEmail   = req.user.email.toLowerCase();
+        const { phrase, lang, category, scope } = req.body;
+        if (!phrase?.trim()) return res.status(400).json({ error: 'Phrase requise' });
 
-router.patch('/dictionary/:id', authenticateToken, async (req, res) => {
-    try {
-        const doc = await AiDictionaryEntry.findById(req.params.id);
-        if (!doc) return res.status(404).json({ message: 'Entrée introuvable' });
-        const userEmail = String(req.user?.email || '').toLowerCase();
-        const isAdmin = _isDictionaryAdmin(userEmail);
-        const canEdit = (doc.scope === 'user' && String(doc.ownerEmail || '').toLowerCase() === userEmail) || (doc.scope === 'global' && isAdmin);
-        if (!canEdit) return res.status(403).json({ message: 'Accès refusé' });
-        if (typeof req.body?.phrase === 'string' && req.body.phrase.trim()) { doc.phrase = req.body.phrase.trim(); doc.normalized = _normalizePhraseKey(doc.phrase); }
-        if (typeof req.body?.lang === 'string' && req.body.lang.trim()) {
-            const newLang = req.body.lang.trim().toLowerCase();
-            if (!/^(fr|en|es|de|it|all)$/.test(newLang)) return res.status(400).json({ message: 'lang invalide' });
-            doc.lang = newLang;
-        }
-        if (typeof req.body?.category === 'string') doc.category = req.body.category.trim();
-        if (typeof req.body?.active === 'boolean') doc.active = req.body.active;
-        await doc.save();
+        const normalized  = _normalizePhraseKey(phrase);
+        if (!normalized) return res.status(400).json({ error: 'Phrase invalide' });
+
+        const isAdmin     = _isDictionaryAdmin(userEmail);
+        const finalScope  = (isAdmin && scope === 'global') ? 'global' : 'user';
+        const finalLang   = String(lang || 'fr').toLowerCase();
+
+        const existing = await AiDictionaryEntry.findOne({ normalized, lang: finalLang,
+            $or: [{ scope:'global' }, { scope:'user', ownerEmail: userEmail }] });
+        if (existing) return res.status(409).json({ error: 'Entrée déjà existante', entry: existing });
+
+        const entry = new AiDictionaryEntry({
+            phrase: phrase.trim(), normalized, lang: finalLang,
+            category: (category||'').trim(), scope: finalScope,
+            ownerEmail: finalScope === 'user' ? userEmail : '', active: true,
+        });
+        await entry.save();
         await _refreshAiDictionaryCache();
-        res.json({ item: doc });
-    } catch (e) {
-        if (e?.code === 11000) return res.status(409).json({ message: 'Entrée déjà existante' });
-        res.status(500).json({ message: 'Erreur mise à jour dictionnaire IA' });
-    }
+
+        console.log(`[AI dict] Ajout "${entry.phrase}" (${finalScope}) par ${userEmail}`);
+        res.status(201).json({ _id: entry._id, phrase: entry.phrase, normalized: entry.normalized,
+            lang: entry.lang, category: entry.category, scope: entry.scope });
+    } catch (err) { res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 router.delete('/dictionary/:id', authenticateToken, async (req, res) => {
     try {
-        const doc = await AiDictionaryEntry.findById(req.params.id);
-        if (!doc) return res.status(404).json({ message: 'Entrée introuvable' });
-        const userEmail = String(req.user?.email || '').toLowerCase();
-        const isAdmin = _isDictionaryAdmin(userEmail);
-        const canDelete = (doc.scope === 'user' && String(doc.ownerEmail || '').toLowerCase() === userEmail) || (doc.scope === 'global' && isAdmin);
-        if (!canDelete) return res.status(403).json({ message: 'Accès refusé' });
-        await AiDictionaryEntry.deleteOne({ _id: doc._id });
+        const userEmail = req.user.email.toLowerCase();
+        const entry     = await AiDictionaryEntry.findById(req.params.id);
+        if (!entry) return res.status(404).json({ error: 'Entrée introuvable' });
+        if (!_isDictionaryAdmin(userEmail) && entry.ownerEmail !== userEmail)
+            return res.status(403).json({ error: 'Accès refusé' });
+        await AiDictionaryEntry.findByIdAndDelete(req.params.id);
         await _refreshAiDictionaryCache();
         res.json({ ok: true });
-    } catch (e) { res.status(500).json({ message: 'Erreur suppression dictionnaire IA' }); }
+    } catch (err) { res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 module.exports = router;
