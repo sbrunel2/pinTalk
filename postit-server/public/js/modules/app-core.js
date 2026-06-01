@@ -381,7 +381,15 @@ async function initApp() {
         auth: { token: localStorage.getItem('token') },
         forceNew: true
     });
-    
+
+    // Rejoindre la room du groupe courant dès que le socket est connecté
+    socket.on('connect', () => {
+        if (currentGroupId) {
+            socket.emit('join-group', currentGroupId);
+            console.log('[SOCKET] join-group', currentGroupId);
+        }
+    });
+
     socket.on('new-message', m => {
         allMsgs.unshift(m);
         // Déclencher l'analyse IA UNIQUEMENT sur les nouveaux messages
@@ -395,12 +403,11 @@ async function initApp() {
             // → évite de relancer l'IA sur des messages de l'historique
             const isFromHistory = !!window._historyJustLoaded;
             if (isMine && isText && isUserMsg && !hiddenFromEink && m.postitId && !isFromHistory) {
-                // Vérification robuste : sourceMessageId OU contenu+postitId identique
+                // Ne lancer l'IA que si ce message n'a pas encore de note IA liée
                 const alreadyHasAi = allMsgs.some(x =>
-                    x.senderName === '✨ IA' && x.postitId === m.postitId &&
-                    (x.sourceMessageId === m._id || !x.sourceMessageId)
-                        ? x.sourceMessageId === m._id
-                        : false
+                    x.senderName === '✨ IA' &&
+                    x.postitId   === m.postitId &&
+                    x.sourceMessageId === m._id  // sourceMessageId DOIT correspondre
                 );
                 if (!alreadyHasAi && !_aiExtractInProgress.has(m._id)) {
                     _aiExtractInProgress.add(m._id);

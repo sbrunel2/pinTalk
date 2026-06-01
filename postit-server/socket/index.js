@@ -89,11 +89,16 @@ function initSocket(io) {
                     date            : new Date(),
                 });
                 await msg.save();
-                // Émettre UNIQUEMENT aux clients du même groupe (room)
-                // évite que tous les utilisateurs reçoivent tous les messages
-                io.to(`group:${data.groupId}`).emit('new-message', msg);
-                // Si l'émetteur n'est pas dans la room (edge case), lui envoyer quand même
-                socket.emit('new-message', msg);
+                // Émettre à la room du groupe — l'émetteur la reçoit aussi
+                // (socket.join fait que io.to inclut le socket émetteur)
+                // PAS de socket.emit séparé pour éviter la double réception
+                const room = `group:${data.groupId}`;
+                if (io.sockets.adapter.rooms.has(room)) {
+                    io.to(room).emit('new-message', msg);
+                } else {
+                    // Personne dans la room (ex: premier message) → broadcast direct
+                    io.emit('new-message', msg);
+                }
             } catch(err) { console.error('[SOCKET] send-message:', err); }
         });
 

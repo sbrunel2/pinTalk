@@ -21,6 +21,8 @@ window.addEventListener('DOMContentLoaded', () => {
             if (e.target.closest('[id^="swipe-"]') || e.target.closest('[id^="bubble-"]')) return;
             if (window._tileJustDragged) return;
             if (window._swipeBlocked)   return;
+            // Bloquer le swipe si le touch vient de la barre d'onglets ou d'un scroll horizontal
+            if (e.target.closest('.tabs-bar')) return;
             touchendX = e.changedTouches[0].screenX;
             handleGesture();
         }, { passive: true });

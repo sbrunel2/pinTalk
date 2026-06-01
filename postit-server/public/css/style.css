@@ -9,6 +9,7 @@ html, body { background: var(--bg); overflow: hidden; height: 100%; position: fi
     position: fixed; top: 0; left: 0; width: 100%; 
     background: var(--bg); z-index: 2000; padding: 8px 12px; border-bottom: 2px solid var(--accent);
     display: flex; flex-direction: column; justify-content: center;
+    overflow: visible; /* laisser les box-shadow des tuiles pintalk dépasser */
 }
 .fixed-header.collapsed #header-details { display: none !important; }
 .fixed-header.collapsed { padding-bottom: 8px; }
@@ -28,6 +29,7 @@ html, body { background: var(--bg); overflow: hidden; height: 100%; position: fi
     height: 100%; 
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
     will-change: transform;
+    overflow: hidden;  /* bloque tout scroll parasite sur le viewport lui-même */
 }
 
 #full-eink-content {
@@ -66,6 +68,7 @@ input[type=checkbox], input[type=radio] {
 input[type="text"], input[type="email"], input[type="password"], textarea { background-image: none; }
 
 #p1 { display: flex; flex-direction: column; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+/* Note: la définition complète de #p1 avec onglets est dans le bloc ONGLETS ci-dessous */
 #sel-group { margin-bottom: 8px !important; height: 42px; font-weight: 900; }
 #p1 .flex.gap-2 { margin-bottom: 8px !important; }
 #p1 .flex.gap-2 select { height: 42px; }
@@ -216,6 +219,8 @@ input[type="text"], input[type="email"], input[type="password"], textarea { back
 /* ── SKIN 1 : Ardoise (bleu nuit lisible) ─────────────────── */
 body.skin-1 { --bg:#1a1f2e; --accent:#60a5fa; }
 body.skin-1, body.skin-1 * { color:#e8eaf0; }
+/* Les tuiles groupe ont leur propre color défini en style inline → ne pas l'écraser */
+body.skin-1 #groups-grid [id^="tile-"] { color:inherit; }
 body.skin-1 .fixed-header { background:#1a1f2e; border-bottom:2px solid #60a5fa; }
 body.skin-1 .page { background:#1a1f2e; }
 body.skin-1 h2, body.skin-1 .acc-label-text, body.skin-1 .acc-toggle-icon { color:#e8eaf0; }
@@ -286,27 +291,46 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
     flex-shrink: 0;
     background: var(--bg);
     border-bottom: 2px solid var(--accent);
-    padding: 6px 8px 4px 8px;
+    padding: 8px 10px 8px 10px; /* plus de padding pour que outline+scale ne soit pas rogné */
+    overflow: visible;           /* laisser dépasser l'outline des tuiles sélectionnées */
 }
 #postit-tabs {
     display: flex;
-    gap: 6px;
+    gap: 8px;                   /* légèrement plus d'espace entre tuiles */
     overflow-x: auto;
+    overflow-y: visible;        /* crucial : laisser le scale dépasser verticalement */
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    padding-bottom: 2px;
+    padding: 4px 2px 6px 2px;  /* padding interne pour que scale ne soit pas rogné */
 }
 #postit-tabs::-webkit-scrollbar { display: none; }
 
 /* ── Entête : tuiles postits ─────────────────────────────────*/
-#header-postit-tabs {
+#header-pintalk-tabs {
     display: none;
-    gap: 5px;
+    gap: 6px;
     overflow-x: auto;
+    overflow-y: visible;           /* laisser le box-shadow dépasser verticalement */
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    align-items: stretch;
+    align-items: center;
     flex: 1;
+    /* Padding vertical pour que le box-shadow de sélection (spread 5px) ne soit pas rogné */
+    padding: 6px 4px;
+}
+#header-pintalk-tabs::-webkit-scrollbar { display: none; }
+
+/* Compatibilité ancienne classe (si référencée ailleurs) */
+#header-postit-tabs {
+    display: none;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    align-items: center;
+    flex: 1;
+    padding: 6px 4px;
 }
 #header-postit-tabs::-webkit-scrollbar { display: none; }
 #header-postit-tabs > div {
@@ -348,13 +372,19 @@ body.skin-2 .btn-plus-3d { background:var(--custom-field, #fff) !important; colo
 
 /* Arrondi tuiles dynamique */
 body { font-family: var(--font-family); font-size: var(--font-size); }
-/* Tuiles groupes et pintalk : forme dynamique — border-radius appliqué par JS via style inline */
+/* Tuiles groupes : forme dynamique — border-radius appliqué par JS via style inline.
+   overflow:visible indispensable pour que le box-shadow de sélection (tile-select.js)
+   ne soit pas rogné par le parent. Le contenu interne est confiné par border-radius. */
 #groups-grid [id^="tile-"] {
+    overflow: visible;
+    transition: border-radius 0.15s, width 0.15s, height 0.15s, transform 0.18s, box-shadow 0.18s;
+}
+/* Le contenu INTERNE des tuiles doit rester confiné dans la forme */
+#groups-grid [id^="tile-"] > * {
     overflow: hidden;
-    transition: border-radius 0.15s, width 0.15s, height 0.15s;
 }
 #header-postit-tabs > div {
-    overflow: hidden;
+    overflow: visible; /* laisser l'outline/scale dépasser */
 }
 /* Cercle : forcer carré */
 #groups-grid.tiles-circle [id^="tile-"] {
@@ -425,3 +455,161 @@ button, .btn-send, .btn-black, .btn-plus-3d, .skin-btn {
 }
 #btn-mic.recording { background: #fee2e2 !important; }
 #btn-mic.recording #mic-icon { color: #dc2626; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ONGLETS — système commun (page Params, modals groupe, pintalk)
+   Fixes :
+   1. Scroll : la barre est sticky, le panneau scroll en dessous
+   2. Swipe : .tabs-bar bloque le swipe horizontal de navigation.js
+   3. Couleurs : look "card" moderne avec bordure basse colorée
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Page Paramètres (#p1) ────────────────────────────────────────────
+   Structure : #p1 = flex-column fixe en hauteur
+               .tabs-bar = sticky en haut
+               .tab-panel = zone scrollable sous la barre              */
+#p1 {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;           /* empêche le scroll global de #p1     */
+    padding: 0 !important;      /* reset le padding .page               */
+    padding-top: var(--header-h, 80px) !important; /* espace sous le header fixe */
+    touch-action: pan-y;        /* autorise scroll vertical, bloque swipe horizontal */
+}
+/* Le panneau actif est la seule zone qui scroll */
+#p1 .tab-panel.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px;
+    padding-bottom: 100px;      /* espace au-dessus de la tab-bar nav   */
+}
+
+/* ── Barre d'onglets ─────────────────────────────────────────────────── */
+.tabs-bar {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-shrink: 0;
+    /* Look "card" : fond blanc, séparateur bas */
+    background: white;
+    border-bottom: 2px solid rgba(0,0,0,0.08);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    /* sticky dans #p1 */
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    /* Dans les modals : pas de sticky (position relative) */
+}
+.tabs-bar::-webkit-scrollbar { display: none; }
+
+/* Barre dans #p1 : collée sous le header fixe */
+#p1 > .tabs-bar {
+    top: 0;   /* #p1 est déjà positionné sous le header grâce au padding de .page */
+    z-index: 100;
+}
+
+/* Pas de sticky dans les modals (overflow:hidden sur le parent) */
+.modal-tabs-bar {
+    position: relative !important;
+    top: auto !important;
+    box-shadow: none;
+    border-bottom: 2px solid rgba(0,0,0,0.1);
+}
+
+/* ── Boutons d'onglets ───────────────────────────────────────────────── */
+.tab-btn {
+    flex-shrink: 0;
+    padding: 12px 15px 10px;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: rgba(0,0,0,0.38);
+    background: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color .15s, border-color .15s;
+    -webkit-tap-highlight-color: transparent;
+    /* Empêche le déclenchement du swipe viewport sur cette zone */
+    touch-action: pan-x;
+    user-select: none;
+}
+.tab-btn:active { opacity: .7; }
+.tab-btn.active {
+    color: var(--accent, #18181b);
+    border-bottom-color: var(--accent, #18181b);
+    background: rgba(0,0,0,0.03);
+}
+
+/* ── Panneaux ─────────────────────────────────────────────────────────── */
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Animation douce à l'activation */
+@keyframes tab-fadein {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.tab-panel.active { animation: tab-fadein .14s ease; }
+
+/* Dans les modals : padding réduit, pas de scroll dédié */
+.tab-panel.modal-tabs {
+    padding: 14px;
+    display: none;
+}
+.tab-panel.modal-tabs.active { display: block; }
+
+/* ── Adaptation skins ────────────────────────────────────────────────── */
+body.skin-1 .tabs-bar { background: #1e2435; border-bottom-color: rgba(255,255,255,0.08); }
+body.skin-1 .tab-btn  { color: rgba(255,255,255,0.35); }
+body.skin-1 .tab-btn.active { color: #60a5fa; border-bottom-color: #60a5fa; background: rgba(255,255,255,0.04); }
+
+body.skin-2 .tabs-bar { background: var(--custom-bg, #f5f4ef); border-bottom-color: rgba(0,0,0,0.08); }
+body.skin-2 .tab-btn.active { color: var(--custom-accent, #18181b); border-bottom-color: var(--custom-accent, #18181b); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TUILES SÉLECTIONNÉES — effet anneau via box-shadow
+   
+   PRINCIPE : box-shadow suit TOUJOURS le border-radius de la tuile
+   (rect, arrondi, cercle) — outline reste rectangulaire sur WebKit mobile.
+   
+   Ces règles CSS ne gèrent QUE position/z-index/transition.
+   Le box-shadow de sélection est appliqué via style inline par tile-select.js
+   pour pouvoir lire le border-radius réel calculé par setDefaultTileShape().
+   
+   NE PAS ajouter ici : background, color, border-radius, overflow
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Tuiles groupe : protection des couleurs inline ─────────────────
+   Le style inline (background/color posé par loadGroupsList) doit avoir
+   la priorité sur les règles de thème (skin-1 * { color }, etc.)       */
+#groups-grid [id^="tile-"] {
+    transition         : transform 0.18s ease, box-shadow 0.18s ease;
+    /* isolation crée un nouveau stacking context : le box-shadow de
+       sélection reste confiné et ne déborde pas sur les voisins         */
+    isolation          : isolate;
+}
+
+/* Tuile active */
+#groups-grid [id^="tile-"].tile-selected {
+    z-index  : 10;
+    position : relative;
+}
+
+/* Animation légère à la sélection */
+@keyframes tile-select-pop {
+    0%   { transform: scale(1.0); }
+    60%  { transform: scale(1.07); }
+    100% { transform: scale(1.05); }
+}
+#groups-grid [id^="tile-"].tile-selected {
+    animation: tile-select-pop 0.20s ease;
+}
+

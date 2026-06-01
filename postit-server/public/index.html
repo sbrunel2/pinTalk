@@ -151,18 +151,22 @@
         </div>
     </div>
 
-    <!-- P1 : PARAMÈTRES (Profil + Visuel) -->
-    <div class="page" id="p1" style="padding-top:var(--header-h,80px)!important;">
 
-        <!-- ── PROFIL UTILISATEUR ─────────────────────────────── -->
-        <div class="acc-item">
-            <input type="checkbox" id="check-profil" class="acc-trigger" checked>
-            <div class="acc-header">
-                <label for="check-profil" class="acc-label-text" data-i18n="profile">👤 Profil</label>
-                <label for="check-profil" class="acc-toggle-icon"></label>
-            </div>
-            <div class="acc-content">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+    <!-- P1 : PARAMÈTRES ─── système d'onglets ─────────────────────────── -->
+    <div class="page" id="p1">
+
+        <!-- ── Barre d'onglets ───────────────────────────────────────────── -->
+        <div class="tabs-bar" class="tabs-bar" id="params-tabs-bar">
+            <button class="tab-btn active" onclick="switchParamsTab('profil',this)">👤 Profil</button>
+            <button class="tab-btn" onclick="switchParamsTab('appearance',this)">🎨 Apparence</button>
+            <button class="tab-btn" onclick="switchParamsTab('dict',this)">🧠 Dico IA</button>
+            <button class="tab-btn" id="params-tab-pro-btn" onclick="switchParamsTab('pro',this)" style="display:none;">🏪 Groupe Pro</button>
+            <button class="tab-btn" onclick="switchParamsTab('about',this)">ℹ️ À propos</button>
+        </div>
+
+        <!-- ── Panneau Profil ─────────────────────────────────────────────── -->
+        <div class="tab-panel active" id="params-panel-profil">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                     <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Prénom
                         <input type="text" id="prof-firstname" placeholder="Prénom" data-i18n="firstname" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                     </label>
@@ -202,32 +206,19 @@
                         </label>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- ── MOT DE PASSE ────────────────────────────────────── -->
-        <div class="acc-item">
-            <input type="checkbox" id="check-mdp" class="acc-trigger">
-            <div class="acc-header">
-                <label for="check-mdp" class="acc-label-text" data-i18n="password">🔒 Mot de passe</label>
-                <label for="check-mdp" class="acc-toggle-icon"></label>
-            </div>
-            <div class="acc-content">
-                <input type="password" id="prof-pwd-cur" placeholder="Mot de passe actuel" data-i18n="currentPwd" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
+            <!-- Mot de passe -->
+            <div style="margin-top:20px;padding-top:16px;border-top:2px solid rgba(0,0,0,.1);">
+                <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:.4;margin-bottom:10px;">🔒 Mot de passe</div>
+<input type="password" id="prof-pwd-cur" placeholder="Mot de passe actuel" data-i18n="currentPwd" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
                 <input type="password" id="prof-pwd-new" placeholder="Nouveau mot de passe" data-i18n="newPwd" style="font-size:13px;padding:8px;border:2px solid var(--accent);background:white;margin-bottom:8px;">
                 <button id="btn-change-pwd" onclick="changePassword()" style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;" data-i18n="changePwd">Changer</button>
             </div>
-        </div>
 
-        <!-- ── SUPPRESSION DE COMPTE ─────────────────────────── -->
-        <div class="acc-item">
-            <input type="checkbox" id="check-delete-account" class="acc-trigger">
-            <div class="acc-header">
-                <label for="check-delete-account" class="acc-label-text" style="color:#dc2626;">⚠️ Supprimer mon compte</label>
-                <label for="check-delete-account" class="acc-toggle-icon"></label>
-            </div>
-            <div class="acc-content">
-                <div style="font-size:10px;padding:10px;background:#fff5f5;border:1px solid #fca5a5;margin-bottom:10px;line-height:1.5;">
+            <!-- Suppression de compte -->
+            <div style="margin-top:20px;padding-top:16px;border-top:2px solid rgba(0,0,0,.1);">
+                <div style="font-size:9px;font-weight:900;text-transform:uppercase;color:#dc2626;margin-bottom:10px;">⚠️ Zone de danger</div>
+<div style="font-size:10px;padding:10px;background:#fff5f5;border:1px solid #fca5a5;margin-bottom:10px;line-height:1.5;">
                     <strong>Cette action est irréversible.</strong><br>
                     Toutes vos données seront supprimées définitivement : votre profil, vos groupes, vos pintalk et tous les messages associés.<br>
                     Si vous êtes propriétaire d'un abonnement Pro, celui-ci sera résilié immédiatement.
@@ -239,15 +230,9 @@
             </div>
         </div>
 
-        <!-- ── APPARENCE GLOBALE ───────────────────────────────── -->
-        <div class="acc-item">
-            <input type="checkbox" id="check-skin" class="acc-trigger">
-            <div class="acc-header">
-                <label for="check-skin" class="acc-label-text" data-i18n="appearance">🎨 Apparence</label>
-                <label for="check-skin" class="acc-toggle-icon"></label>
-            </div>
-            <div class="acc-content">
-                <div style="font-size:8px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:6px;">Thème</div>
+        <!-- ── Panneau Apparence ──────────────────────────────────────────── -->
+        <div class="tab-panel" id="params-panel-appearance">
+<div style="font-size:8px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:6px;">Thème</div>
                 <div id="skin-selector" style="display:flex;gap:6px;margin-bottom:14px;">
                     <button class="skin-btn active" onclick="applySkin(0)">Défaut</button>
                     <button class="skin-btn" onclick="applySkin(1)">Ardoise</button>
@@ -325,18 +310,11 @@
                     <button onclick="removeBgImage()" style="width:100%;padding:8px;border:2px solid rgba(0,0,0,0.2);background:white;font-size:10px;font-weight:900;text-transform:uppercase;cursor:pointer;">✕ Supprimer image de fond</button>
 
                 </div>
-            </div>
         </div>
 
-        <!-- ── DICTIONNAIRE IA MULTILINGUE ───────────────────── -->
-        <div class="acc-item">
-            <input type="checkbox" id="check-ai-dict" class="acc-trigger">
-            <div class="acc-header">
-                <label for="check-ai-dict" class="acc-label-text">🧠 Dictionnaire IA</label>
-                <label for="check-ai-dict" class="acc-toggle-icon"></label>
-            </div>
-            <div class="acc-content">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <!-- ── Panneau Dictionnaire IA ───────────────────────────────────── -->
+        <div class="tab-panel" id="params-panel-dict">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                     <label style="font-size:8px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Langue
                         <select id="ai-dict-lang" style="font-size:12px;padding:8px;border:2px solid var(--accent);background:white;margin:0;">
                             <option value="fr">FR</option>
@@ -365,18 +343,96 @@
                     <button onclick="loadAiDictionaryUI()" style="flex:1;padding:10px;background:white;border:2px solid var(--accent);font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">Rafraîchir</button>
                 </div>
                 <div id="ai-dict-list" style="max-height:220px;overflow:auto;border:1px solid rgba(0,0,0,0.12);padding:6px;background:white;font-size:10px;"></div>
-            </div>
         </div>
 
-        <!-- ── À PROPOS ──────────────────────────────────────── -->
-        <div class="acc-item">
-            <input type="checkbox" id="check-about" class="acc-trigger">
-            <div class="acc-header">
-                <label for="check-about" class="acc-label-text">ℹ️ À propos &amp; RGPD</label>
-                <label for="check-about" class="acc-toggle-icon"></label>
-            </div>
-            <div class="acc-content">
-                <div style="font-size:11px;line-height:1.6;color:#333;">
+        <!-- ── Panneau Groupe Pro (masqué si pas propriétaire d'un groupe pro) -->
+        <div class="tab-panel" id="params-panel-pro" style="display:none;">
+<!-- Nom du groupe (info) -->
+                <div style="background:black;color:white;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
+                    <div style="font-size:18px;">🏪</div>
+                    <div>
+                        <div id="pro-group-name" style="font-weight:900;font-size:14px;"></div>
+                        <div style="font-size:9px;opacity:.5;font-weight:700;text-transform:uppercase;">Groupe Professionnel</div>
+                    </div>
+                </div>
+
+                <!-- ── SECTION EMPLOYÉS ── -->
+                <div style="margin-bottom:20px;">
+                    <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:.4;margin-bottom:8px;letter-spacing:.05em;">
+                        👷 Employés
+                    </div>
+
+                    <!-- Liste employés -->
+                    <div id="pro-employes-list" style="margin-bottom:12px;"></div>
+
+                    <!-- Inviter un employé -->
+                    <div style="border:2px dashed rgba(0,0,0,.15);padding:12px;">
+                        <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:.5;margin-bottom:6px;">Inviter un employé</div>
+                        <div style="display:flex;gap:6px;">
+                            <input type="email" id="pro-invite-employe-email" placeholder="email@exemple.com"
+                                style="flex:1;padding:9px;border:2px solid var(--accent);font-size:12px;background:white;min-width:0;">
+                            <button onclick="proInviteEmploye()"
+                                style="padding:9px 14px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;flex-shrink:0;">
+                                Inviter
+                            </button>
+                        </div>
+                        <div style="font-size:9px;opacity:.4;margin-top:4px;">Un email d'invitation sera envoyé s'il n'a pas encore de compte.</div>
+                    </div>
+                </div>
+
+                <!-- ── SECTION RÔLES ── -->
+                <div style="margin-bottom:20px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:.4;letter-spacing:.05em;">
+                            🎭 Rôles & Droits
+                        </div>
+                        <button onclick="_proCreateRole()"
+                            style="padding:5px 10px;border:2px solid var(--accent);background:white;font-size:10px;font-weight:900;text-transform:uppercase;cursor:pointer;">
+                            + Nouveau rôle
+                        </button>
+                    </div>
+                    <div id="pro-roles-list" style="margin-bottom:8px;"></div>
+                    <div style="font-size:9px;opacity:.4;line-height:1.4;">
+                        Les rôles définissent les droits des employés. Un employé peut avoir plusieurs rôles, ses droits sont cumulés.
+                    </div>
+                </div>
+
+                <!-- ── SECTION CLIENTS ── -->
+                <div style="margin-bottom:20px;">
+                    <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:.4;margin-bottom:8px;letter-spacing:.05em;">
+                        👥 Clients
+                    </div>
+
+                    <!-- Liste clients -->
+                    <div id="pro-clients-list" style="margin-bottom:12px;"></div>
+
+                    <!-- Inviter un client -->
+                    <div style="border:2px dashed rgba(0,0,0,.15);padding:12px;margin-bottom:10px;">
+                        <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:.5;margin-bottom:6px;">Inviter un client par email</div>
+                        <div style="display:flex;gap:6px;">
+                            <input type="email" id="pro-invite-client-email" placeholder="email@exemple.com"
+                                style="flex:1;padding:9px;border:2px solid var(--accent);font-size:12px;background:white;min-width:0;">
+                            <button onclick="proInviteClient()"
+                                style="padding:9px 14px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;flex-shrink:0;">
+                                Inviter
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- QR Code -->
+                    <button onclick="proShowQrCode()"
+                        style="width:100%;padding:12px;border:2px solid var(--accent);background:white;font-weight:900;font-size:12px;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">
+                        📱 Afficher le QR Code client
+                    </button>
+                    <div style="font-size:9px;opacity:.4;margin-top:4px;text-align:center;">
+                        Les clients scannent ce QR code pour rejoindre votre groupe directement.
+                    </div>
+                </div>
+        </div>
+
+        <!-- ── Panneau À propos ───────────────────────────────────────────── -->
+        <div class="tab-panel" id="params-panel-about">
+<div style="font-size:11px;line-height:1.6;color:#333;">
                     <div style="font-size:16px;font-weight:900;text-transform:uppercase;margin-bottom:4px;">Pintalk</div>
                     <div style="font-size:9px;opacity:0.5;margin-bottom:12px;">by AIGenis — v1.0</div>
 
@@ -408,7 +464,6 @@
                     <div style="font-size:9px;font-weight:900;text-transform:uppercase;opacity:0.6;margin-top:8px;margin-bottom:2px;">Contact</div>
                     <p style="font-size:10px;">AIGenis — contact@aigenis.fr<br>Responsable de traitement des données personnelles</p>
                 </div>
-            </div>
         </div>
 
     </div>
@@ -594,8 +649,16 @@
 <script src="js/modules/ui.js"></script>
 <!-- params : profil, mot de passe, dictionnaire IA, téléphone, deleteAccount -->
 <script src="js/modules/params.js"></script>
+<!-- pro-params : paramètres groupe professionnel (employés, rôles, clients, QR code) -->
+<script src="js/modules/pro-params.js"></script>
 <!-- groups : loadGroupsList, selectGroup, drag/pinch, CRUD groupes + membres -->
 <script src="js/modules/groups.js"></script>
+<!-- group-modal : modal paramètres groupe avec onglets + rôles pro (après groups.js pour override) -->
+<script src="js/modules/group-modal.js"></script>
+<!-- delete-confirm : confirmation par code email avant suppression groupe/pintalk + archivage -->
+<script src="js/modules/delete-confirm.js"></script>
+<!-- tile-select : sélection visuelle des tuiles sans écraser les couleurs perso -->
+<script src="js/modules/tile-select.js"></script>
 <!-- postits : renderPostitTabs, selectPostit, CRUD pintalk, loadGroupData -->
 <script src="js/modules/postits.js"></script>
 <!-- chat : refreshView, toggleNote, send, deleteMessage, editMessage, statuts -->

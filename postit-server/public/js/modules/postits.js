@@ -114,10 +114,22 @@ function renderPostitTabs(postits, selectedId) {
 
     const tabs = _cachedPostits.map(p => {
         const isActive = p._id === selectedId;
-        const bg     = isActive ? 'var(--accent)' : '#fff';
-        const color  = isActive ? '#fff' : 'var(--accent)';
-        const border = isActive ? '2px solid var(--accent)' : '2px solid rgba(0,0,0,0.15)';
-        const shadow = isActive ? '2px 2px 0 rgba(0,0,0,0.3)' : '2px 2px 0 rgba(0,0,0,0.1)';
+
+        // ── Sélection visuelle ────────────────────────────────────────────────
+        // Technique : box-shadow multicouche à la place de outline.
+        // Avantage : box-shadow suit TOUJOURS le border-radius de la tuile,
+        // contrairement à outline qui reste rectangulaire sur certains moteurs
+        // WebKit/Blink mobiles selon le context de stacking.
+        //   couche 1 (spread 3px)  : anneau noir plein — le "contour" visible
+        //   couche 2 (spread 5px)  : halo blanc — sépare le contour du fond parent
+        //   couche 3               : ombre portée — profondeur / relief
+        // Les couleurs de fond/texte de la tuile sont TOUJOURS conservées.
+        const border = isActive ? '2px solid #18181b' : '2px solid rgba(0,0,0,0.15)';
+        const shadow = isActive
+            ? '0 0 0 3px #18181b, 0 0 0 5px rgba(255,255,255,0.75), 2px 4px 10px rgba(0,0,0,0.3)'
+            : '2px 2px 0 rgba(0,0,0,0.08)';
+        const scale  = isActive ? 'scale(1.05)' : 'scale(1)';
+        const zIdx   = isActive ? 'z-index:5;position:relative;' : '';
 
         // Label de la tuile
         let label = '';
@@ -149,19 +161,21 @@ function renderPostitTabs(postits, selectedId) {
         const _ptShapeGlobal = window._currentTileShape || localStorage.getItem('tileShape') || 'rect';
         const _ptShape  = (_userPrefs?.pintalkPrefs?.[p._id]?.shape) || p.tileShape || _ptShapeGlobal;
         const _ptRadius = _ptShape === 'circle' ? '50%' : _ptShape === 'rounded' ? '16px' : '0px';
-        const ptSize    = _ptShape === 'circle' ? 'width:60px;height:60px;min-height:60px;' : 'width:70px;min-height:56px;';
+        const ptSize    = _ptShape === 'circle' ? 'width:52px;height:52px;min-height:52px;' : 'width:58px;min-height:50px;';
         // Couleurs : préf utilisateur > propriété pintalk > défaut
         const _ptPref   = _userPrefs?.pintalkPrefs?.[p._id] || {};
-        const ptBg    = isActive ? 'var(--accent)' : (_ptPref.color     || p.tileColor     || '#fff');
-        const ptColor = isActive ? '#fff'          : (_ptPref.textColor || p.tileTextColor || 'var(--accent)');
+        // Toujours utiliser les couleurs personnalisées (même si actif)
+        const ptBg    = _ptPref.color     || p.tileColor     || '#fff';
+        const ptColor = _ptPref.textColor || p.tileTextColor || 'var(--accent)';
         // Logo miniature
         const ptLogoHtml = p.tileLogoUrl
             ? `<img src="${p.tileLogoUrl}" style="width:24px;height:24px;object-fit:cover;border-radius:${_ptRadius==='50%'?'50%':'3px'};margin-bottom:3px;pointer-events:none;">`
             : '';
         return `<div id="ptab-${p._id}" onclick="selectPostit('${p._id}')"
-                     style="flex-shrink:0;${ptSize}position:relative;
+                     style="flex-shrink:0;${ptSize}${zIdx}
                             background:${ptBg};color:${ptColor};border:${border};box-shadow:${shadow};
-                            border-radius:${_ptRadius};overflow:hidden;
+                            border-radius:${_ptRadius};overflow:visible;
+                            transform:${scale};transition:transform 0.18s,box-shadow 0.18s,border-color 0.18s;
                             padding:5px 4px 16px 4px;cursor:pointer;display:flex;
                             flex-direction:column;align-items:center;justify-content:center;text-align:center;">
                     ${ptLogoHtml}
@@ -173,7 +187,7 @@ function renderPostitTabs(postits, selectedId) {
     // Tuile "+"
     const addTab = canCreate
         ? `<div onclick="uiCreatePostit()"
-                style="flex-shrink:0;width:52px;min-height:44px;display:flex;flex-direction:column;
+                style="flex-shrink:0;width:44px;min-height:44px;display:flex;flex-direction:column;
                        align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation;
                        border:2px dashed rgba(0,0,0,0.25);color:rgba(0,0,0,0.35);
                        background:rgba(255,255,255,0.5);">
@@ -506,51 +520,77 @@ async function uiEditPostit(postitId) {
 
     const modalHtml = `
     <div id="pintalk-edit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9998;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;">
-        <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);padding:20px;width:100%;max-width:380px;margin-top:60px;">
-            <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin-bottom:4px;">
-                ${canEdit ? '⚙️' : '👁️'} ${isPro ? t('orderInfo').replace('📦 ','') : 'Postit'}
-            </h3>
-            ${!canEdit ? `<div style="font-size:9px;opacity:0.5;margin-bottom:12px;font-style:italic;">Lecture seule — vous n'êtes pas le créateur</div>` : '<div style="margin-bottom:14px;"></div>'}
+        <div style="background:var(--bg);border:3px solid var(--accent);box-shadow:6px 6px 0 rgba(0,0,0,0.3);width:100%;max-width:380px;margin-top:60px;overflow:hidden;">
 
-            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('clientName').replace(' *','')}</div>
-            <input type="text" id="pe-name" value="${p.name||''}" ${ro}
-                   style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;${roStyle}box-sizing:border-box;">
+            <!-- Titre + fermeture -->
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:2px solid var(--accent);">
+                <h3 style="font-size:13px;font-weight:900;text-transform:uppercase;margin:0;">
+                    ${canEdit ? '⚙️' : '👁️'} ${isPro ? '📦 Commande' : 'Pintalk'}
+                </h3>
+                <button onclick="document.getElementById('pintalk-edit-modal').remove()"
+                    style="background:none;border:none;font-size:20px;cursor:pointer;padding:0;opacity:.6;">✕</button>
+            </div>
 
-            ${isPro ? `
-            <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('pickupDate').replace(' *','')}</div>
-            <input type="datetime-local" id="pe-date" value="${fmtDate}" ${ro}
-                   style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;${roStyle}box-sizing:border-box;">
-            <div style="display:flex;gap:8px;margin-bottom:10px;">
-                <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('phone')}</div>
-                    <input type="tel" id="pe-phone" value="${p.phone||''}" ${ro}
-                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;${roStyle}box-sizing:border-box;">
-                </div>
-                <div style="flex:1;">
-                    <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('orderNum')}</div>
-                    <input type="text" id="pe-ordernum" value="${p.orderNumber||''}" ${ro}
-                           style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;${roStyle}box-sizing:border-box;">
-                </div>
-            </div>` : ''}
+            <!-- Barre d'onglets -->
+            <div class="tabs-bar modal-tabs" id="pintalk-modal-tabs">
+                <button class="tab-btn active" onclick="switchModalTab('pintalk-edit-modal','info',this)">
+                    ${isPro ? '📦 Commande' : '📝 Infos'}
+                </button>
+                ${canEdit ? `<button class="tab-btn" onclick="switchModalTab('pintalk-edit-modal','look',this)">🎨 Apparence</button>` : ''}
+                ${canEdit ? `<button class="tab-btn" onclick="switchModalTab('pintalk-edit-modal','guests',this)">👥 Participants</button>` : ''}
+                ${canEdit && isOwnerOrAdmin ? `<button class="tab-btn" onclick="switchModalTab('pintalk-edit-modal','danger',this)" style="color:rgba(220,38,38,.7);">⚠️</button>` : ''}
+            </div>
 
+            <!-- ── Onglet Infos ─────────────────────────────────────── -->
+            <div class="tab-panel modal-tabs active" id="pintalk-edit-modal-tab-info" style="padding:16px;">
+                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('clientName').replace(' *','')}</div>
+                <input type="text" id="pe-name" value="${p.name||''}" ${ro}
+                       style="width:100%;border:2px solid var(--accent);padding:9px;font-size:13px;margin-bottom:10px;${roStyle}box-sizing:border-box;">
+
+                ${isPro ? `
+                <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('pickupDate').replace(' *','')}</div>
+                <input type="datetime-local" id="pe-date" value="${fmtDate}" ${ro}
+                       style="width:100%;border:2px solid var(--accent);padding:8px;font-size:12px;margin-bottom:10px;${roStyle}box-sizing:border-box;">
+                <div style="display:flex;gap:8px;margin-bottom:10px;">
+                    <div style="flex:1;">
+                        <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('phone')}</div>
+                        <input type="tel" id="pe-phone" value="${p.phone||''}" ${ro}
+                               style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;${roStyle}box-sizing:border-box;">
+                    </div>
+                    <div style="flex:1;">
+                        <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:3px;">${t('orderNum')}</div>
+                        <input type="text" id="pe-ordernum" value="${p.orderNumber||''}" ${ro}
+                               style="width:100%;border:2px solid rgba(0,0,0,0.15);padding:8px;font-size:12px;${roStyle}box-sizing:border-box;">
+                    </div>
+                </div>` : ''}
+
+                ${!canEdit ? `<div style="font-size:9px;opacity:0.5;margin-top:8px;font-style:italic;">Lecture seule — vous n'êtes pas le créateur</div>` : ''}
+
+                ${canEdit ? `
+                <div style="display:flex;gap:6px;margin-top:14px;">
+                    <button onclick="document.getElementById('pintalk-edit-modal').remove()"
+                            style="flex:1;padding:10px;border:2px solid var(--accent);background:white;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('cancel')}</button>
+                    <button onclick="submitEditPostit('${postitId}')"
+                            style="flex:2;padding:10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('modify')}</button>
+                </div>` : `
+                <button onclick="document.getElementById('pintalk-edit-modal').remove()"
+                        style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;margin-top:14px;">OK</button>`}
+            </div>
+
+            <!-- ── Onglet Apparence ───────────────────────────────────── -->
             ${canEdit ? `
-            <!-- ── Apparence de la tuile pintalk ────────────── -->
-            <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:10px;margin-bottom:10px;">
+            <div class="tab-panel modal-tabs" id="pintalk-edit-modal-tab-look" style="padding:16px;">
                 <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:8px;">🎨 Apparence de la tuile</div>
-                <!-- Couleurs -->
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                    <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">
-                        Fond
+                    <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Fond
                         <input type="color" id="pe-tile-bg" value="${p.tileColor||'#ffffff'}"
                                style="width:100%;height:26px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
                     </label>
-                    <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">
-                        Texte
+                    <label style="font-size:7px;font-weight:900;text-transform:uppercase;display:flex;flex-direction:column;gap:3px;">Texte
                         <input type="color" id="pe-tile-text" value="${p.tileTextColor||'#18181b'}"
                                style="width:100%;height:26px;border:2px solid rgba(0,0,0,0.15);padding:0;cursor:pointer;">
                     </label>
                 </div>
-                <!-- Forme -->
                 <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Forme</div>
                 <div style="display:flex;gap:5px;margin-bottom:8px;" id="pe-shape-btns">
                     ${['rect','rounded','circle'].map(s => {
@@ -558,27 +598,29 @@ async function uiEditPostit(postitId) {
                         const active = cur === s;
                         const label = s==='rect'?'■ Rect':s==='rounded'?'▢ Arrondi':'● Cercle';
                         const br = s==='circle'?'50%':s==='rounded'?'6px':'0';
-                        return `<button onclick="selectPintalkShape('${s}')" id="pe-pshape-${s}"
-                            style="flex:1;padding:5px 3px;border:2px solid ${active?'var(--accent)':'rgba(0,0,0,0.15)'};
-                                   background:${active?'var(--accent)':'white'};color:${active?'white':'#333'};
-                                   font-size:8px;font-weight:900;cursor:pointer;border-radius:${br};text-transform:uppercase;">${label}</button>`;
+                        return '<button onclick="selectPintalkShape(\'' + s + '\')" id="pe-pshape-' + s + '" style="flex:1;padding:5px 3px;border:2px solid ' + (active?'var(--accent)':'rgba(0,0,0,0.15)') + ';background:' + (active?'var(--accent)':'white') + ';color:' + (active?'white':'#333') + ';font-size:8px;font-weight:900;cursor:pointer;border-radius:' + br + ';text-transform:uppercase;">' + label + '</button>';
                     }).join('')}
                 </div>
                 <input type="hidden" id="pe-tile-shape" value="${p.tileShape||''}">
-                <!-- Logo -->
                 <div style="font-size:7px;font-weight:900;text-transform:uppercase;opacity:0.5;margin-bottom:4px;">Logo (optionnel)</div>
-                ${p.tileLogoUrl ? `<img src="${p.tileLogoUrl}" style="width:32px;height:32px;object-fit:cover;border:1px solid rgba(0,0,0,0.15);margin-bottom:4px;display:block;">` : ''}
+                ${p.tileLogoUrl ? '<img src="' + p.tileLogoUrl + '" style="width:32px;height:32px;object-fit:cover;border:1px solid rgba(0,0,0,0.15);margin-bottom:4px;display:block;">' : ''}
                 <input type="file" id="pe-tile-logo" accept="image/*"
                        style="width:100%;padding:4px;border:2px solid rgba(0,0,0,0.15);font-size:10px;background:white;margin-bottom:8px;">
-                <!-- Bouton réinitialiser -->
                 <button onclick="resetPintalkTileToDefault('${postitId}')"
-                    style="width:100%;padding:6px;border:2px solid rgba(0,0,0,0.2);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;margin-bottom:4px;">
+                    style="width:100%;padding:6px;border:2px solid rgba(0,0,0,0.2);background:white;font-size:9px;font-weight:900;text-transform:uppercase;cursor:pointer;margin-bottom:12px;">
                     ↺ Appliquer les paramètres par défaut
                 </button>
-            </div>
+                <div style="display:flex;gap:6px;">
+                    <button onclick="document.getElementById('pintalk-edit-modal').remove()"
+                            style="flex:1;padding:10px;border:2px solid var(--accent);background:white;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('cancel')}</button>
+                    <button onclick="submitEditPostit('${postitId}')"
+                            style="flex:2;padding:10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('modify')}</button>
+                </div>
+            </div>` : ''}
 
-            <!-- Participants (visible seulement si canEdit) -->
-            <div style="border-top:2px solid rgba(0,0,0,0.1);padding-top:10px;margin-bottom:10px;">
+            <!-- ── Onglet Participants ────────────────────────────────── -->
+            ${canEdit ? `
+            <div class="tab-panel modal-tabs" id="pintalk-edit-modal-tab-guests" style="padding:16px;">
                 <div style="font-size:8px;font-weight:900;opacity:0.5;text-transform:uppercase;margin-bottom:6px;">${t('pintalkParticipants')}</div>
                 <div id="pe-invites-list" style="min-height:20px;margin-bottom:6px;">
                     <em style="opacity:0.4;font-size:10px;">Chargement…</em>
@@ -592,23 +634,33 @@ async function uiEditPostit(postitId) {
                 </div>
             </div>` : ''}
 
-            <div style="display:flex;gap:6px;margin-top:14px;flex-wrap:wrap;">
-                ${canEdit ? `
-                <button onclick="document.getElementById('pintalk-edit-modal').remove()"
-                        style="flex:1;padding:10px;border:2px solid var(--accent);background:white;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('cancel')}</button>
-                <button onclick="submitEditPostit('${postitId}')"
-                        style="flex:2;padding:10px;background:var(--accent);color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">${t('modify')}</button>
-                ${isOwnerOrAdmin ? `<button onclick="confirmDeletePostit('${postitId}')"
-                        style="flex:1;padding:10px;background:#dc2626;color:white;border:none;font-weight:900;font-size:10px;text-transform:uppercase;cursor:pointer;">🗑️</button>` : ''}
-                ` : `
-                <button onclick="document.getElementById('pintalk-edit-modal').remove()"
-                        style="width:100%;padding:12px;background:var(--accent);color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">OK</button>
-                `}
-            </div>
+            <!-- ── Onglet Danger ──────────────────────────────────────── -->
+            ${canEdit ? `
+            <div class="tab-panel modal-tabs" id="pintalk-edit-modal-tab-danger" style="padding:16px;">
+                <div style="font-size:9px;font-weight:900;text-transform:uppercase;color:#dc2626;margin-bottom:12px;">⚠️ Zone de danger</div>
+
+                <!-- Archiver & vider (tous les éditeurs) -->
+                <button onclick="archiveAndClearPostit('${postitId}','${(p && p.name ? p.name : '').replace(/'/g,"\\'")}' )"
+                    style="width:100%;padding:12px;background:#0d9488;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;margin-bottom:6px;">
+                    📦 Archiver &amp; vider la conversation
+                </button>
+                <div style="font-size:9px;opacity:.5;margin-bottom:16px;">Sauvegarde les messages dans les Archives puis vide le pintalk. Le pintalk et ses participants sont conservés.</div>
+
+                <!-- Supprimer (owner/admin seulement) -->
+                ${isOwnerOrAdmin ? `
+                <button onclick="confirmDeletePostit('${postitId}')"
+                    style="width:100%;padding:12px;background:#dc2626;color:white;border:none;font-weight:900;font-size:11px;text-transform:uppercase;cursor:pointer;">
+                    🗑️ Supprimer ce pintalk
+                </button>
+                <div style="font-size:9px;opacity:.5;margin-top:5px;">Un code de confirmation sera envoyé par email.</div>
+                ` : ''}
+            </div>` : ''}
+
         </div>
     </div>`;
 
     document.body.insertAdjacentHTML('beforeend', modalHtml);
+    if (canEdit) setTimeout(() => loadPostitInvites(postitId), 80);
     if (canEdit) setTimeout(() => loadPostitInvites(postitId), 80);
 }
 

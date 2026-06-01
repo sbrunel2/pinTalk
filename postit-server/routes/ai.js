@@ -32,21 +32,29 @@ function _cacheSet(text, lang, result) {
     _geminiCache.set(_cacheKey(text, lang), { result, expiresAt: Date.now() + _CACHE_TTL_MS });
 }
 
-// ── Rate-limiter simple : délai minimum entre appels + blocage quota ──────────
-// Pas de file chaînée (évite la boucle infinie de promesses)
-// Si Gemini est en quota 429, _geminiBlockedUntil est positionné dans le futur
-// et tout appel pendant ce délai retourne null immédiatement sans appeler Gemini
-const _GEMINI_MIN_INTERVAL_MS = parseInt(process.env.GEMINI_MIN_INTERVAL_MS || '4500');
+// ── Rate-limiter simple ───────────────────────────────────────────────────────
+// IMPORTANT : pas de flag booléen permanent — le blocage expire via timestamp
+// _geminiBlockedUntil = 0 → pas bloqué ; > Date.now() → bloqué
+const _GEMINI_MIN_INTERVAL_MS = parseInt(process.env.GEMINI_MIN_INTERVAL_MS || '2500'); // flash-lite: 30 RPM
 let   _lastGeminiCallAt    = 0;
-let   _geminiBlockedUntil  = 0; // timestamp jusqu'auquel Gemini est bloqué (quota)
+let   _geminiBlockedUntil  = 0;
+let   _geminiConsecutive429 = 0;
 
 function _isGeminiBlocked() {
-    return Date.now() < _geminiBlockedUntil;
+    if (_geminiBlockedUntil === 0) return false;
+    if (Date.now() >= _geminiBlockedUntil) {
+        _geminiBlockedUntil = 0; // expiration automatique
+        _geminiConsecutive429 = 0;
+        console.log('[Gemini] ✅ Blocage expiré — Gemini disponible');
+        return false;
+    }
+    return true;
 }
 
 function _blockGemini(seconds) {
     _geminiBlockedUntil = Date.now() + (seconds * 1000);
-    console.warn(`[Gemini] Bloqué pendant ${seconds}s (quota)`);
+    const expireAt = new Date(_geminiBlockedUntil).toLocaleTimeString('fr-FR');
+    console.warn(`[Gemini] ⏳ Bloqué ${seconds}s — déblocage à ${expireAt}`);
 }
 
 async function _respectRateLimit() {
@@ -96,12 +104,12 @@ router.post('/extract-multi', authenticateToken, async (req, res) => {
                 return res.json({ items: [], source: 'hard-negation', understood: true });
             }
 
-            const geminiKey = process.env.GEMINI_API_KEY;
-            let geminiItems = null;
+            const geminiKey   = process.env.GEMINI_API_KEY;
+            const geminiModel = process.env.GEMINI_MODEL; // absent = fallback NLP uniquement
             let source = 'gemini';
             let geminiUnderstood = true; // ce que Gemini a déclaré
 
-            if (geminiKey) {
+            if (geminiKey && geminiModel) {
                 // 1. Cache
                 const cached = _cacheGet(normalizedText, lang);
                 if (cached) {
@@ -110,9 +118,8 @@ router.post('/extract-multi', authenticateToken, async (req, res) => {
                     geminiUnderstood = cached.understood;
                     source           = 'gemini-cache';
                 } else if (_isGeminiBlocked()) {
-                    // Quota dépassé : ne pas appeler Gemini, retourner null directement
                     const remaining = Math.ceil((_geminiBlockedUntil - Date.now()) / 1000);
-                    console.warn(`[Gemini] Bloqué encore ${remaining}s — appel annulé`);
+                    console.warn(`[Gemini] ⏳ Bloqué encore ${remaining}s — appel annulé pour : "${normalizedText.substring(0,40)}"`);
                     geminiItems = null;
                 } else {
                     // Appel Gemini avec délai minimum entre requêtes
@@ -130,25 +137,25 @@ router.post('/extract-multi', authenticateToken, async (req, res) => {
 
             // Gemini indisponible (null = erreur réseau/timeout/quota)
             if (geminiItems === null) {
-                console.warn('[AI] Gemini indisponible — fallback NLP');
-                // Fallback NLP : extraction par règles + filtre strict
-                // Bien meilleur que le découpage mécanique d'avant :
-                // utilise le dico + _splitByArticles + _isLikelyProductText
-                const fallbackRaw = _fallbackExtract(normalizedText) || [];
+                // Fallback NLP : extraction par règles (Gemini indisponible/quota)
+                const fallbackRaw   = _fallbackExtract(normalizedText) || [];
                 const fallbackItems = fallbackRaw
                     .map(t => ({
-                        text: _cleanExtractedItemText(String(t).replace(/^__WORD__/, '')),
-                        uncertain: isQuestion, // si phrase interrogative → uncertain
+                        text    : _cleanExtractedItemText(String(t).replace(/^__WORD__/, '')),
+                        uncertain: isQuestion,
                     }))
                     .filter(item =>
                         item.text && item.text.length >= 2 &&
                         _isLikelyProductText(item.text) &&
                         _isDefinitelyAProduct(item.text)
                     );
-                // Si le fallback ne trouve rien de propre → bulle marquée ⚠️
+
                 if (fallbackItems.length === 0) {
-                    return res.json({ items: [], source: 'fallback-empty', understood: _isLikelyPureConversation(normalizedText) });
+                    const isPureConv = _isLikelyPureConversation(normalizedText);
+                    console.log(`[AI] Fallback NLP — aucun produit extrait de "${normalizedText.substring(0,50)}" | conversation:${isPureConv}`);
+                    return res.json({ items: [], source: 'fallback-empty', understood: isPureConv });
                 }
+                console.log(`[AI] Fallback NLP — ${fallbackItems.length} produit(s) : [${fallbackItems.map(i=>i.text).join(', ')}]`);
                 return res.json({ items: fallbackItems, source: 'fallback-nlp', understood: true });
             }
 
@@ -203,105 +210,114 @@ async function _callGeminiWithMeta(text, lang, apiKey) {
     const UNAVAILABLE = { items: null, understood: true, source: 'gemini-error' };
     const langLabel = { fr:'français', en:'english', es:'español', de:'Deutsch', it:'italiano' }[lang] || 'français';
 
-    // ── Prompt compact (≈ 300 tokens vs 600 avant) ────────────────────────────
     const systemInstruction = `Extracteur de produits pour listes de courses/commandes. Langue: ${langLabel}.
 RÈGLES : (1) Retourner UNIQUEMENT les noms de produits réels du message — jamais les verbes, pronoms, mots interrogatifs, articles seuls. (2) Comprendre le sens global : "je vais prendre du pain" → produit="pain". (3) Mots composés groupés : "steak haché" → UN item. (4) Doute/question/conditionnel → uncertain=true. (5) Négation ferme → ne pas inclure le produit. (6) Aucun produit identifiable → items=[] understood=false.
 FORMAT JSON strict : {"items":[{"text":"produit","uncertain":false}],"understood":true}`;
 
-    // ── 8 few-shots essentiels (≈ 400 tokens vs 900 avant) ───────────────────
     const fewShots = [
-        // Plusieurs produits + verbe à ignorer
         { role:'user',  parts:[{text:'il me faut du pain, des oeufs et du beurre'}] },
         { role:'model', parts:[{text:'{"items":[{"text":"pain","uncertain":false},{"text":"oeufs","uncertain":false},{"text":"beurre","uncertain":false}],"understood":true}'}] },
-        // Verbe + préposition à ignorer → seul le produit
         { role:'user',  parts:[{text:'je vais prendre du lait'}] },
         { role:'model', parts:[{text:'{"items":[{"text":"lait","uncertain":false}],"understood":true}'}] },
-        // Question/suggestion → uncertain
-        { role:'user',  parts:[{text:'pourquoi pas prendre du pain et est-ce qu il faut des yaourts ?'}] },
+        { role:'user',  parts:[{text:"pourquoi pas prendre du pain et est-ce qu il faut des yaourts ?"}] },
         { role:'model', parts:[{text:'{"items":[{"text":"pain","uncertain":true},{"text":"yaourts","uncertain":true}],"understood":true}'}] },
-        // Conditionnel rhétorique → uncertain
         { role:'user',  parts:[{text:'il ne faudrait pas du jambon ?'}] },
         { role:'model', parts:[{text:'{"items":[{"text":"jambon","uncertain":true}],"understood":true}'}] },
-        // Mot composé sans tiret → groupé
         { role:'user',  parts:[{text:'des steaks haches et des pommes de terre stp'}] },
         { role:'model', parts:[{text:'{"items":[{"text":"steaks haches","uncertain":false},{"text":"pommes de terre","uncertain":false}],"understood":true}'}] },
-        // Négation ferme → items vides
         { role:'user',  parts:[{text:'non pas de lardons'}] },
         { role:'model', parts:[{text:'{"items":[],"understood":true}'}] },
-        // Quantité + produit
         { role:'user',  parts:[{text:'2 kg de tomates et 500g de farine'}] },
         { role:'model', parts:[{text:'{"items":[{"text":"2 kg tomates","uncertain":false},{"text":"500g farine","uncertain":false}],"understood":true}'}] },
-        // Conversation pure → items vides, understood false
         { role:'user',  parts:[{text:'bonjour je serai la a 18h ok merci'}] },
         { role:'model', parts:[{text:'{"items":[],"understood":false}'}] },
     ];
 
     const body = {
         system_instruction: { parts: [{ text: systemInstruction }] },
-        contents: [...fewShots, { role: 'user', parts: [{ text }] }],
-        generationConfig: {
-            temperature: 0.0,
-            maxOutputTokens: 256,
-            responseMimeType: 'application/json',
-        },
-        safetySettings: [
-            { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-        ],
+        contents: [...fewShots, { role: 'user', parts: [{ text }] }]
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    // Modèle et endpoint 100% pilotés par .env — aucune valeur codée en dur
+    // Si GEMINI_MODEL absent → l'appelant (extract-multi) ne fera pas appel à cette fonction
+    const model       = process.env.GEMINI_MODEL;
+    const apiEndpoint = process.env.GEMINI_API_ENDPOINT
+                        || 'https://generativelanguage.googleapis.com/v1beta';
+    const url = `${apiEndpoint}/models/${model}:generateContent?key=${apiKey}`;
+
+    const _traceId = Date.now().toString(36).slice(-4).toUpperCase();
+    console.log(`[Gemini→] #${_traceId} "${text.substring(0,60)}" | model:${model} | lang:${lang}`);
 
     try {
         const resp = await fetch(url, {
-            method: 'POST',
+            method : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(8000),
+            body   : JSON.stringify(body),
+            signal : AbortSignal.timeout(8000),
         });
 
+        console.log(`[Gemini←] #${_traceId} HTTP ${resp.status} (${resp.headers?.get('content-type')||'?'})`);
+
         if (!resp.ok) {
-            console.warn('[Gemini] HTTP', resp.status);
-            // Gérer le 429 : bloquer IMMÉDIATEMENT les appels suivants
+            const errBody = await resp.json().catch(() => ({}));
+
             if (resp.status === 429) {
-                const errBody = await resp.json().catch(() => ({}));
-                const retryInfo = (errBody?.error?.details || [])
-                    .find(d => d['@type'] && d['@type'].includes('RetryInfo'));
-                const rawDelay = retryInfo?.retryDelay || '60s';
-                const delaySec = Math.max(60, Math.ceil(parseFloat(rawDelay) || 60) + 5);
-                _blockGemini(delaySec);
+                _geminiConsecutive429++;
+                const details      = errBody?.error?.details || [];
+                const errMsg       = errBody?.error?.message || '';
+                const quotaMetrics = details.filter(d => d.violations)
+                    .flatMap(d => d.violations || [])
+                    .map(v => v.quotaId || v.quotaMetric || '?').join(', ');
+                console.warn(`[Gemini←] #${_traceId} 429 — métriques: ${quotaMetrics || 'inconnues'}`);
+                console.warn(`[Gemini←] #${_traceId} 429 — message: ${errMsg.substring(0, 200)}`);
+                const retryInfo = details.find(d => d['@type'] && d['@type'].includes('RetryInfo'));
+                const rawDelay  = retryInfo?.retryDelay || '0s';
+                const delaySec  = Math.ceil(parseFloat(rawDelay) || 0);
+                const hasPerDay = details.some(d => d.violations && d.violations.some(v => v.quotaId && v.quotaId.includes('PerDay')));
+                const isExplicitlyDaily = hasPerDay && delaySec > 60;
+                const pauseSec = Math.min(120, Math.max(15, delaySec + 2));
+                console.warn(`[Gemini←] #${_traceId} 429 — ${isExplicitlyDaily?'quota/JOUR':'quota/minute'} — pause ${pauseSec}s | retryDelay: "${rawDelay}"`);
+                _blockGemini(pauseSec);
+            } else {
+                console.warn(`[Gemini←] #${_traceId} HTTP ${resp.status} — ${JSON.stringify(errBody).substring(0,200)}`);
             }
             return UNAVAILABLE;
         }
 
+        _geminiConsecutive429 = 0;
+
         const data = await resp.json();
         const raw  = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (!raw) return UNAVAILABLE;
+        if (!raw) {
+            console.warn(`[Gemini←] #${_traceId} Réponse vide`);
+            return UNAVAILABLE;
+        }
 
         let parsed;
         try {
             const clean = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
             parsed = JSON.parse(clean);
         } catch (e) {
-            console.warn('[Gemini] Parse JSON error:', e.message);
+            console.warn(`[Gemini←] #${_traceId} Parse JSON error: ${e.message} | raw: ${raw.substring(0,100)}`);
             return UNAVAILABLE;
         }
 
-        if (!Array.isArray(parsed?.items)) return UNAVAILABLE;
+        if (!Array.isArray(parsed?.items)) {
+            console.warn(`[Gemini←] #${_traceId} Structure inattendue:`, JSON.stringify(parsed).substring(0,100));
+            return UNAVAILABLE;
+        }
 
         const items = parsed.items
             .filter(i => i && typeof i.text === 'string' && i.text.trim().length > 0)
             .map(i => ({ text: i.text.trim(), uncertain: !!i.uncertain }));
 
         const understood = parsed.understood !== false;
-        console.log(`[Gemini] "${text.substring(0,50)}" → ${items.length} produit(s)`);
+        console.log(`[Gemini←] #${_traceId} Succès → ${items.length} produit(s) : [${items.map(i=>i.text).join(', ')}] | understood:${understood}`);
         return { items, understood, source: 'gemini' };
 
     } catch (err) {
-        if (err.name === 'TimeoutError') console.warn('[Gemini] Timeout');
-        else console.warn('[Gemini]', err.message);
+        if (err.name === 'TimeoutError') console.warn(`[Gemini←] #${_traceId} TIMEOUT (8s)`);
+        else console.warn(`[Gemini←] #${_traceId} ERREUR réseau : ${err.message}`);
         return UNAVAILABLE;
     }
 }
@@ -439,6 +455,34 @@ router.delete('/dictionary/:id', authenticateToken, async (req, res) => {
         await _refreshAiDictionaryCache();
         res.json({ ok: true });
     } catch (err) { res.status(500).json({ error: 'Erreur serveur' }); }
+});
+
+// ── Route diagnostic (GET /api/ai/status) ────────────────────────────────────
+// Affiche l'état actuel du rate-limiter Gemini sans authentification obligatoire
+// (protégé par authenticateToken en production)
+router.get('/status', authenticateToken, (req, res) => {
+    const now       = Date.now();
+    const blocked   = _isGeminiBlocked();
+    const remaining = blocked ? Math.ceil((_geminiBlockedUntil - now) / 1000) : 0;
+    const lastCall  = _lastGeminiCallAt
+        ? `${Math.ceil((now - _lastGeminiCallAt)/1000)}s ago`
+        : 'jamais';
+    const cacheSize = _geminiCache?.size || 0;
+
+    res.json({
+        gemini: {
+            blocked,
+            blockedUntil    : blocked ? new Date(_geminiBlockedUntil).toISOString() : null,
+            remainingSeconds: remaining,
+            consecutive429  : _geminiConsecutive429,
+            lastCallAgo     : lastCall,
+            apiKeyConfigured: !!process.env.GEMINI_API_KEY,
+        },
+        cache: {
+            size   : cacheSize,
+            ttlMin : 30,
+        },
+    });
 });
 
 module.exports = router;

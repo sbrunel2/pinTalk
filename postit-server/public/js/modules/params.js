@@ -192,10 +192,9 @@ function setDefaultTileShape(shape) {
         const gid = tile.id.replace('tile-', '');
         const indivShape = _userPrefs?.tilePrefs?.[gid]?.shape || null;
         if (indivShape) {
-            // Tuile avec forme individuelle → appliquer SA forme
             const ri = indivShape === 'circle' ? '50%' : indivShape === 'rounded' ? '16px' : '0px';
             tile.style.borderRadius = ri;
-            tile.style.overflow     = 'hidden';
+            tile.style.overflow     = 'visible';
             if (indivShape === 'circle') {
                 tile.style.width = tile.style.height = tile.style.minHeight = '88px';
                 tile.style.padding = '4px';
@@ -205,9 +204,8 @@ function setDefaultTileShape(shape) {
                 tile.style.padding = '';
             }
         } else {
-            // Tuile sans forme individuelle → appliquer la forme globale
             tile.style.borderRadius = r;
-            tile.style.overflow     = 'hidden';
+            tile.style.overflow     = 'visible';
             if (shape === 'circle') {
                 tile.style.width = tile.style.height = tile.style.minHeight = '88px';
                 tile.style.padding = '4px';
@@ -217,6 +215,7 @@ function setDefaultTileShape(shape) {
                 tile.style.padding = '';
             }
         }
+        // NE PAS modifier background/color : gérés par le style inline HTML
     });
 
     // Mettre à jour la grille CSS

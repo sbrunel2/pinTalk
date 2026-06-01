@@ -505,10 +505,9 @@ function setDefaultTileShape(shape) {
         const gid = tile.id.replace('tile-', '');
         const indivShape = _userPrefs?.tilePrefs?.[gid]?.shape || null;
         if (indivShape) {
-            // Tuile avec forme individuelle → appliquer SA forme
             const ri = indivShape === 'circle' ? '50%' : indivShape === 'rounded' ? '16px' : '0px';
             tile.style.borderRadius = ri;
-            tile.style.overflow     = 'hidden';
+            tile.style.overflow     = 'visible';
             if (indivShape === 'circle') {
                 tile.style.width = tile.style.height = tile.style.minHeight = '88px';
                 tile.style.padding = '4px';
@@ -518,9 +517,8 @@ function setDefaultTileShape(shape) {
                 tile.style.padding = '';
             }
         } else {
-            // Tuile sans forme individuelle → appliquer la forme globale
             tile.style.borderRadius = r;
-            tile.style.overflow     = 'hidden';
+            tile.style.overflow     = 'visible';
             if (shape === 'circle') {
                 tile.style.width = tile.style.height = tile.style.minHeight = '88px';
                 tile.style.padding = '4px';
@@ -530,6 +528,8 @@ function setDefaultTileShape(shape) {
                 tile.style.padding = '';
             }
         }
+        // NE PAS modifier background/color : gérés par le style inline HTML
+        // et restaurés par tile-select.js via data-bg/data-color
     });
 
     // Mettre à jour la grille CSS
@@ -760,8 +760,9 @@ async function loadGroupsList() {
         const roleFull = {owner:'Proprio', admin:'Admin', employe:'Employé', client:'Membre'};
         const groupTilesHtml = ordered.map(g => {
             const isActive = g._id === currentGroupId;
-            const bg    = isActive ? 'var(--accent)' : '#fff';
-            const color = isActive ? '#fff' : 'var(--accent)';
+            // bg/color conservés pour compatibilité (non utilisés pour les tuiles)
+            const bg    = '#fff';
+            const color = 'var(--accent)';
             const canEdit = true; // Tout le monde voit la roue (contenu adapté selon rôle)
             const canEditGroup = g.myRole === 'owner' || g.myRole === 'admin';
             const logoHtml = g.logoUrl
@@ -770,15 +771,18 @@ async function loadGroupsList() {
             // Style de la tuile : préf utilisateur > propriétés du groupe > défaut
             const _prefBg   = _userPrefs?.tilePrefs?.[g._id]?.color     || '';
             const _prefText = _userPrefs?.tilePrefs?.[g._id]?.textColor || '';
-            const tColor  = isActive ? 'var(--accent)' : (_prefBg   || g.tileColor     || '#fff');
-            const tText   = isActive ? '#fff'          : (_prefText || g.tileTextColor || 'var(--accent)');
-            const tShape  = g.tileShape     || 'rect';
-            const tFont   = g.tileFontFamily|| '';
+            // NE PAS écraser les couleurs perso quand isActive
+            // La sélection est signalée par outline+scale via tile-select.js
+            const tColor  = _prefBg   || g.tileColor     || '#fff';
+            const tText   = _prefText || g.tileTextColor || 'var(--accent)';
+            const tFont   = g.tileFontFamily || '';
             const tFSize  = g.tileFontSize  || '8';
-            const radius  = tShape === 'circle' ? '50%' : tShape === 'rounded' ? '12px' : '0px';
-            const tileStyleExtra = `background:${tColor};color:${tText};border-radius:${radius};` +
-                (tFont   ? `font-family:${tFont};` : '') +
-                (tFSize  ? `font-size:${tFSize}px;` : '');
+            // background avec fallback explicite '#fff' pour éviter fond transparent/noir
+            const tileStyleExtra = `background:${tColor || '#fff'};color:${tText || 'var(--accent)'};` +
+                (tFont  ? `font-family:${tFont};`       : '') +
+                (tFSize ? `font-size:${tFSize}px;`      : '');
+            // Note : border-radius est défini UNE SEULE fois ci-dessous via _tr (forme individuelle > globale)
+            // Ne pas le mettre aussi dans tileStyleExtra pour éviter le conflit avec setDefaultTileShape()
 
             // Forme : préf utilisateur en priorité, puis globale
             const _indivShape = _userPrefs?.tilePrefs?.[g._id]?.shape || null;
@@ -786,14 +790,17 @@ async function loadGroupsList() {
             const _tr  = _ts === 'circle' ? '50%' : _ts === 'rounded' ? '16px' : '0px';
             const tileW = _ts === 'circle' ? 'width:88px;height:88px;' : '';
             return `<div id="tile-${g._id}"
+                data-bg="${tColor || '#fff'}"
+                data-color="${tText || 'var(--accent)'}"
                 ontouchstart="tileTouch(event,'${g._id}')"
                 ontouchmove="tileTouchMove(event)"
                 ontouchend="tileTouchEnd(event,'${g._id}')"
                 onclick="selectGroup('${g._id}')"
                 style="${tileStyleExtra}${tileW}
-                       border-radius:${_tr};overflow:hidden;
-                       border:2px solid ${isActive?'var(--accent)':'rgba(0,0,0,0.18)'};
-                       box-shadow:${isActive?'3px 3px 0 rgba(0,0,0,0.35)':'3px 3px 0 rgba(0,0,0,0.12)'};
+                       border-radius:${_tr};overflow:visible;
+                       border:2px solid rgba(0,0,0,0.18);
+                       box-shadow:3px 3px 0 rgba(0,0,0,0.12);
+                       transition:transform 0.18s,box-shadow 0.18s;
                        padding:8px 5px 16px 5px;cursor:pointer;display:flex;flex-direction:column;
                        align-items:center;text-align:center;position:relative;
                        min-height:88px;justify-content:center;
@@ -965,7 +972,8 @@ function _getTileShape(tile) {
 function _applyShapeToTile(tile, shape) {
     const r = shape === 'circle' ? '50%' : shape === 'rounded' ? '16px' : '0px';
     tile.style.borderRadius = r;
-    tile.style.overflow     = 'hidden';
+    tile.style.overflow     = 'visible';
+    // NE PAS modifier background/color : gérés par le style inline HTML
     tile.dataset.tileShape  = shape;
     if (shape === 'circle') {
         tile.style.width = tile.style.height = tile.style.minHeight = '88px';
@@ -2514,10 +2522,13 @@ function renderPostitTabs(postits, selectedId) {
 
     const tabs = _cachedPostits.map(p => {
         const isActive = p._id === selectedId;
-        const bg     = isActive ? 'var(--accent)' : '#fff';
-        const color  = isActive ? '#fff' : 'var(--accent)';
-        const border = isActive ? '2px solid var(--accent)' : '2px solid rgba(0,0,0,0.15)';
-        const shadow = isActive ? '2px 2px 0 rgba(0,0,0,0.3)' : '2px 2px 0 rgba(0,0,0,0.1)';
+        // Couleurs TOUJOURS conservées (jamais écrasées par isActive)
+        // La sélection est signalée uniquement via border + box-shadow
+        const border  = isActive ? '2px solid #18181b' : '2px solid rgba(0,0,0,0.15)';
+        const shadow  = isActive
+            ? '0 0 0 3px #18181b, 0 0 0 5px rgba(255,255,255,0.8), 2px 4px 8px rgba(0,0,0,0.25)'
+            : '2px 2px 0 rgba(0,0,0,0.1)';
+        const ptScale = isActive ? 'scale(1.05)' : 'scale(1)';
 
         // Label de la tuile
         let label = '';
@@ -2552,16 +2563,18 @@ function renderPostitTabs(postits, selectedId) {
         const ptSize    = _ptShape === 'circle' ? 'width:60px;height:60px;min-height:60px;' : 'width:70px;min-height:56px;';
         // Couleurs : préf utilisateur > propriété pintalk > défaut
         const _ptPref   = _userPrefs?.pintalkPrefs?.[p._id] || {};
-        const ptBg    = isActive ? 'var(--accent)' : (_ptPref.color     || p.tileColor     || '#fff');
-        const ptColor = isActive ? '#fff'          : (_ptPref.textColor || p.tileTextColor || 'var(--accent)');
+        // Couleurs perso conservées même si actif (sélection via outline+scale)
+        const ptBg    = _ptPref.color     || p.tileColor     || '#fff';
+        const ptColor = _ptPref.textColor || p.tileTextColor || 'var(--accent)';
         // Logo miniature
         const ptLogoHtml = p.tileLogoUrl
             ? `<img src="${p.tileLogoUrl}" style="width:24px;height:24px;object-fit:cover;border-radius:${_ptRadius==='50%'?'50%':'3px'};margin-bottom:3px;pointer-events:none;">`
             : '';
         return `<div id="ptab-${p._id}" onclick="selectPostit('${p._id}')"
-                     style="flex-shrink:0;${ptSize}position:relative;
+                     style="flex-shrink:0;${ptSize}${isActive?'position:relative;z-index:5;':''}
                             background:${ptBg};color:${ptColor};border:${border};box-shadow:${shadow};
-                            border-radius:${_ptRadius};overflow:hidden;
+                            border-radius:${_ptRadius};overflow:visible;
+                            transform:${ptScale};transition:transform 0.18s,box-shadow 0.18s,border-color 0.18s;
                             padding:5px 4px 16px 4px;cursor:pointer;display:flex;
                             flex-direction:column;align-items:center;justify-content:center;text-align:center;">
                     ${ptLogoHtml}

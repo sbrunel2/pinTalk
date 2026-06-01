@@ -6,6 +6,12 @@ const cloudinary = require('cloudinary');
 const { authenticateToken } = require('../helpers/auth');
 const { _getUserRoleInGroup } = require('../helpers/permissions');
 const { Group, Permission, Device, Postit, Message, Archive } = require('../models');
+const { _getMailTransport } = require('../helpers/mail');
+const crypto = require('crypto');
+
+// Codes de confirmation suppression (en mémoire, TTL 10min)
+// clé : userEmail+targetId → { code, expires, type, targetId, targetName }
+const _deleteCodes = new Map();
 
 // ── DEVICES ───────────────────────────────────────────────────────────────────
 
@@ -372,6 +378,244 @@ router.get('/archives', authenticateToken, async (req, res) => {
             .sort({ archivedAt: -1 });
         res.json(archives);
     } catch (err) { res.status(500).send(err.message); }
+});
+
+// ── ARCHIVER & VIDER une conversation pintalk ─────────────────────────────────
+// POST /api/postits/:id/archive-clear
+// Sauvegarde tous les messages en Archive, puis les supprime du pintalk
+router.post('/postits/:id/archive-clear', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const postitId  = req.params.id;
+
+        const postit = await Postit.findById(postitId);
+        if (!postit) return res.status(404).send('Pintalk introuvable.');
+
+        // Vérifier droits : owner du groupe ou allowedEmail
+        const device = await Device.findById(postit.deviceId);
+        const group  = device ? await Group.findById(device.groupId) : null;
+        if (!group) return res.status(404).send('Groupe introuvable.');
+
+        const isOwner = group.ownerEmail === userEmail;
+        const isMember = postit.allowedEmails?.includes(userEmail);
+        if (!isOwner && !isMember) return res.status(403).send('Accès refusé.');
+
+        // Charger tous les messages du pintalk
+        const messages = await Message.find({ postitId }).sort({ date: 1 }).lean();
+        if (!messages.length) return res.status(400).send('Aucun message à archiver.');
+
+        // Construire le contenu de l'archive
+        const content = messages.map(m => ({
+            author : m.senderName || 'Inconnu',
+            text   : m.content   || '',
+            date   : m.date,
+            type   : m.type      || 'text',
+            isNote : !!m.isNote,
+            checked: !!m.checked,
+        }));
+
+        // Sauvegarder en Archive (format enrichi avec postitId pour la restauration)
+        const archive = new Archive({
+            groupName  : group.name,
+            deviceName : device.name,
+            postitName : postit.name,
+            postitId   : postitId,   // pour la restauration directe
+            groupId    : group._id.toString(),
+            deviceId   : device._id.toString(),
+            content,
+            archivedAt : new Date(),
+            adminId    : userEmail,
+            ownerEmail : userEmail,
+            archivedBy : userEmail,
+            msgCount   : messages.length,
+        });
+        await archive.save();
+
+        // Supprimer tous les messages du pintalk
+        await Message.deleteMany({ postitId });
+
+        console.log(`[ARCHIVE-CLEAR] ${postit.name} archivé (${messages.length} msgs) par ${userEmail}`);
+        res.json({ ok: true, archiveId: archive._id, msgCount: messages.length });
+
+    } catch(err) {
+        console.error('[ARCHIVE-CLEAR]', err);
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+// ── RESTAURER une archive dans un pintalk ─────────────────────────────────────
+// POST /api/archives/:id/restore
+// Recopie les messages d'une archive dans un pintalk cible (nouveau ou existant)
+router.post('/archives/:id/restore', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const archiveId = req.params.id;
+        const { targetPostitId } = req.body; // ID du pintalk de destination
+
+        const archive = await Archive.findById(archiveId);
+        if (!archive) return res.status(404).send('Archive introuvable.');
+
+        // Vérifier que l'utilisateur a accès à l'archive
+        if (archive.ownerEmail !== userEmail && archive.adminId !== userEmail) {
+            // Vérifier via le groupe
+            const group = archive.groupId
+                ? await Group.findById(archive.groupId)
+                : await Group.findOne({ name: archive.groupName });
+            if (!group || group.ownerEmail !== userEmail)
+                return res.status(403).send('Accès refusé.');
+        }
+
+        // Vérifier le pintalk cible
+        const targetPostit = await Postit.findById(targetPostitId);
+        if (!targetPostit) return res.status(404).send('Pintalk cible introuvable.');
+
+        // Restaurer les messages
+        const msgs = (archive.content || []).map(m => ({
+            groupId    : archive.groupId || '',
+            deviceId   : archive.deviceId || targetPostit.deviceId,
+            postitId   : targetPostitId,
+            senderName : m.author || 'Inconnu',
+            content    : m.text   || '',
+            type       : m.type   || 'text',
+            isNote     : !!m.isNote,
+            checked    : false, // on repart de zéro pour les cases
+            date       : m.date ? new Date(m.date) : new Date(),
+            restoredFrom: archiveId,
+        }));
+
+        await Message.insertMany(msgs);
+
+        console.log(`[RESTORE] Archive "${archive.postitName}" → pintalk ${targetPostitId} (${msgs.length} msgs) par ${userEmail}`);
+        res.json({ ok: true, msgCount: msgs.length, targetPostitId });
+
+    } catch(err) {
+        console.error('[RESTORE]', err);
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+// ── ENVOI CODE DE CONFIRMATION SUPPRESSION ────────────────────────────────────
+// POST /api/delete-confirm/request
+// Génère et envoie un code à 6 chiffres par email avant suppression groupe/pintalk
+router.post('/delete-confirm/request', authenticateToken, async (req, res) => {
+    try {
+        const userEmail  = req.user.email;
+        const { type, targetId, targetName } = req.body;
+        // type : 'group' | 'postit'
+
+        if (!type || !targetId || !targetName)
+            return res.status(400).send('Paramètres manquants.');
+
+        // Générer le code
+        const code    = String(Math.floor(100000 + Math.random() * 900000));
+        const expires = Date.now() + 10 * 60 * 1000; // 10 minutes
+        const key     = userEmail + '::' + targetId;
+        _deleteCodes.set(key, { code, expires, type, targetId, targetName, userEmail });
+
+        // Envoyer le mail
+        const typeLabel = type === 'group' ? 'groupe' : 'pintalk';
+        try {
+            const transport = _getMailTransport();
+            await transport.sendMail({
+                from   : `"e-Postit Pro" <${process.env.SMTP_USER}>`,
+                to     : userEmail,
+                subject: `Confirmation suppression — ${targetName}`,
+                html   : `
+<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:2px solid #18181b;">
+    <h2 style="font-weight:900;text-transform:uppercase;margin-bottom:4px;">⚠️ Suppression</h2>
+    <p style="opacity:.6;font-size:12px;margin-bottom:20px;">e-Postit Pro</p>
+    <p>Vous avez demandé la suppression du ${typeLabel} <strong>"${targetName}"</strong>.</p>
+    <p style="font-size:13px;">Cette action est <strong>irréversible</strong>.</p>
+    <div style="margin:24px 0;text-align:center;">
+        <div style="font-size:11px;text-transform:uppercase;opacity:.5;margin-bottom:6px;">Code de confirmation</div>
+        <div style="font-size:38px;font-weight:900;letter-spacing:10px;font-family:monospace;border:2px solid #18181b;padding:14px 20px;display:inline-block;">
+            ${code}
+        </div>
+    </div>
+    <p style="font-size:11px;opacity:.5;">Ce code expire dans <strong>10 minutes</strong>.<br>
+    Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>
+</div>`,
+            });
+        } catch(mailErr) {
+            console.error('[DELETE-CONFIRM] Erreur email:', mailErr.message);
+            // Ne pas bloquer si le mail échoue — retourner le code en dev
+            if (process.env.NODE_ENV !== 'production') {
+                console.log(`[DELETE-CONFIRM] Code dev: ${code}`);
+                return res.json({ ok: true, devCode: code }); // debug uniquement
+            }
+        }
+
+        console.log(`[DELETE-CONFIRM] Code envoyé à ${userEmail} pour ${type} "${targetName}"`);
+        res.json({ ok: true });
+
+    } catch(err) {
+        console.error('[DELETE-CONFIRM]', err);
+        res.status(500).send('Erreur serveur.');
+    }
+});
+
+// ── VÉRIFICATION + EXÉCUTION SUPPRESSION ─────────────────────────────────────
+// POST /api/delete-confirm/execute
+// Vérifie le code et exécute la suppression
+router.post('/delete-confirm/execute', authenticateToken, async (req, res) => {
+    try {
+        const userEmail = req.user.email;
+        const { code, targetId, type } = req.body;
+        if (!code || !targetId || !type)
+            return res.status(400).send('Paramètres manquants.');
+
+        const key   = userEmail + '::' + targetId;
+        const entry = _deleteCodes.get(key);
+
+        if (!entry)
+            return res.status(400).json({ error: 'Code invalide ou expiré.' });
+        if (Date.now() > entry.expires) {
+            _deleteCodes.delete(key);
+            return res.status(400).json({ error: 'Code expiré. Recommencez.' });
+        }
+        if (entry.code !== String(code).trim())
+            return res.status(400).json({ error: 'Code incorrect.' });
+
+        // Code valide → supprimer l'entrée
+        _deleteCodes.delete(key);
+
+        // ── Exécuter la suppression ───────────────────────────────────────────
+        if (type === 'postit') {
+            const postit = await Postit.findById(targetId);
+            if (!postit) return res.status(404).send('Pintalk introuvable.');
+            await Message.deleteMany({ postitId: targetId });
+            await Postit.findByIdAndDelete(targetId);
+            console.log(`[DELETE] Pintalk "${entry.targetName}" supprimé par ${userEmail}`);
+            return res.json({ ok: true, type: 'postit' });
+
+        } else if (type === 'group') {
+            const group = await Group.findById(targetId);
+            if (!group) return res.status(404).send('Groupe introuvable.');
+            if (group.ownerEmail !== userEmail)
+                return res.status(403).send('Seul le propriétaire peut supprimer le groupe.');
+
+            // Cascade complète
+            const devices   = await Device.find({ groupId: targetId });
+            const deviceIds = devices.map(d => d._id.toString());
+            const postits   = await Postit.find({ deviceId: { $in: deviceIds } });
+            const postitIds = postits.map(p => p._id.toString());
+            await Message.deleteMany({ postitId: { $in: postitIds } });
+            await Message.deleteMany({ groupId: targetId });
+            await Postit.deleteMany({ deviceId: { $in: deviceIds } });
+            await Device.deleteMany({ groupId: targetId });
+            const { Permission, Role } = require('../models');
+            await Permission.deleteMany({ groupId: targetId });
+            await Role.deleteMany({ groupId: targetId });
+            await Group.findByIdAndDelete(targetId);
+            console.log(`[DELETE] Groupe "${entry.targetName}" supprimé par ${userEmail}`);
+            return res.json({ ok: true, type: 'group' });
+        }
+
+        res.status(400).send('Type inconnu.');
+    } catch(err) {
+        console.error('[DELETE-CONFIRM-EXEC]', err);
+        res.status(500).send('Erreur serveur.');
+    }
 });
 
 module.exports = router;

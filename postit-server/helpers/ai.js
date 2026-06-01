@@ -136,16 +136,11 @@ async function _normalizeTextWithAiDictionary(text, userEmail, lang = 'fr') {
 function _isQuestion(text) {
     const t = String(text || '').trim();
     if (!t) return false;
-    // Marqueur explicite
     if (t.includes('?')) return true;
-    // Structures interrogatives (est-ce que, a-t-on besoin...)
     if (/\best[\s-]*ce\s+qu/i.test(t)) return true;
     if (/\ba[\s-]*t[\s-]*on\s+besoin\b/i.test(t)) return true;
     if (/\bon\s+a\s+besoin\b/i.test(t)) return true;
     if (/\bbesoin\s+de\b/i.test(t)) return true;
-    // Conditionnel rhétorique : "il ne faudrait pas", "il faudrait pas",
-    // "est-ce qu'il ne faudrait pas", "ne devrait-on pas"
-    // → question déguisée, le produit reste incertain
     if (/\b(?:ne\s+)?faudrait(?:[\s-]*(?:il|on|pas))?\b/i.test(t)) return true;
     if (/\bdevrait(?:[\s-]*(?:on|pas))?\b/i.test(t)) return true;
     if (/\bpourrait(?:[\s-]*(?:on|pas))?\b/i.test(t)) return true;
@@ -154,21 +149,13 @@ function _isQuestion(text) {
     return false;
 }
 
-// Négation RÉELLE (refus ferme, pas une question rhétorique)
-// "non je ne veux pas de pain" → vrai négation
-// "il ne faudrait pas du pain" → question/doute → PAS une négation réelle
 function _isHardNegation(text) {
     const t = String(text || '').toLowerCase().trim();
     if (!t) return false;
-    // Si ça contient "oui" c'est au plus partiel
     if (/\boui\b/.test(t)) return false;
-    // "non" seul ou en début = négation ferme
     if (/^non\b/.test(t)) return true;
-    // "pas de X" sans conditionnel = négation ferme
     if (/\bpas\s+(?:du|de|d['']|des|le|la|les|un|une)\b/.test(t) && !/\b(?:faudrait|devrait|pourrait|serait)\b/.test(t)) return true;
-    // "ne ... pas" sans conditionnel = négation ferme
     if (/\b(?:ne|n[''])\s+.*\s+pas\b/.test(t) && !/\b(?:faudrait|devrait|pourrait|serait)\b/.test(t)) return true;
-    // "plus jamais prendre/acheter" = négation ferme
     if (/\b(?:plus|jamais)\b/.test(t) && /\b(?:prendre|acheter|mettre|ajouter)\b/.test(t)) return true;
     return false;
 }
@@ -242,12 +229,13 @@ function _fallbackExtract(text) {
 function _cleanExtractedItemText(text) {
     if (!text) return '';
     let s = String(text);
-    // NE PAS supprimer les tirets internes : ils protègent les mots composés du dico
-    // (ex: steak-haché, pommes-de-terre, coquilles-saint-jacques)
-    // On ne supprime que le tiret de LISTE en tout début de chaîne
     s = s
         .replace(/^[\-–—•]\s*/, '')        // tiret de puce en début seulement
-        .replace(/^\d+[.)\s]\s*/, '')       // numérotation de liste
+        // ── CORRECTION : ne supprimer la numérotation QUE si suivie de . ou )
+        // PAS d'espace seul — sinon "2 ballons" → "ballons", "3 escalopes" → "escalopes"
+        // Avant : /^\d+[.)\s]\s*/  ← \s matche l'espace → supprime les quantités !
+        // Après : /^\d+[.)]\s+/    ← seulement . ou ) suivis d'espace = vraie numérotation
+        .replace(/^\d+[.)]\s+/, '')         // numérotation de liste : "1. item" ou "2) item"
         .replace(/^(?:oui|ok|okay|d['']accord|stp|svp|please)\s+/i, '')
         .replace(/^(?:est[\s-]*ce\s+que|est[\s-]*ce\s+qu['']|faut[\s-]*il|il\s+faut(?:rait)?|faudrait(?:[\s-]*il)?|devrait(?:[\s-]*on)?|pourrait(?:[\s-]*on)?|a[\s-]*t[\s-]*on\s+besoin\s+de|avons[\s-]*nous\s+besoin\s+de|dois[\s-]*je(?:\s+prendre)?|doit[\s-]*on(?:\s+prendre)?|je\s+dois(?:\s+prendre)?|n['']oublie\s+pas(?:\s+de)?|pense\s+[aà]|on\s+prend|prends?|prendre|acheter|ach[eè]te|ajouter|ajoute|ramener|ram[eè]ne)\s+/i, '')
         .replace(/\s+(?:stp|svp|please|merci)\s*$/i, '')
@@ -276,11 +264,8 @@ function _isLikelyProductText(text) {
     const words = key.split(/\s+/).filter(Boolean);
     if (!words.length) return false;
 
-    // ── Mots et expressions qui ne sont JAMAIS des produits ─────────────────
     const junk = new Set([
-        // pronoms
         'je','tu','il','elle','on','nous','vous','ils','elles','me','te','se','y','en',
-        // verbes communs sans contexte produit
         'suis','es','est','sommes','etes','sont',
         'ai','as','a','avons','avez','ont',
         'vais','vas','va','allons','allez','vont',
@@ -294,38 +279,26 @@ function _isLikelyProductText(text) {
         'mets','met','mettons','mettez','mettent','mettre',
         'veux','veut','voulons','voulez','veulent','vouloir',
         'sais','sait','savons','savez','savent',
-        // auxiliaires modaux
         'faudrait','devrait','pourrait','voudrait','serait',
         'faut','doit','peut',
-        // mots grammaticaux
         'que','qui','quoi','dont','ou','et','mais','donc','or','ni','car',
         'si','comme','quand','lorsque','puisque',
-        // salutations et réponses courtes (jamais des produits)
         'oui','non','ok','okay','ouais','nope','yep','yes','no',
         'bonjour','bonsoir','salut','coucou','hello','hi','hey',
         'merci','stp','svp','please','super','nickel','parfait','top','cool',
         'vu','ok merci','bonne journee','bonne soiree','a bientot','a plus',
-        // articles seuls
         'le','la','les','un','une','des','du','de',
-        // nombres isolés (les quantités accompagnées d'un produit sont OK)
         'deux','trois','quatre','cinq','six','sept','huit','neuf','dix',
         'onze','douze','quinze','vingt','trente','cent','mille',
     ]);
 
-    // Rejet si le texte entier est un mot-junk
     if (junk.has(key)) return false;
-
-    // Rejet si TOUS les mots sont des mots-junk (ex: "je vais prendre")
     if (words.every(w => junk.has(w))) return false;
-
-    // Rejet si commence par une expression grammaticale
     if (/^(est ce|est ce que|ce que|que je|je dois|dois je|il faut|faut il|je vais|on va|il va|je veux|on veut)/.test(key)) return false;
 
-    // Un seul mot numérique seul → pas un produit
     if (words.length === 1) {
         const w = words[0];
         if (/^\d+$/.test(w)) return false;
-        // Mais une quantité+unité collée est valide (ex: "500g")
         if (/^\d+[\.,]?\d*(g|gr|kg|ml|cl|dl|l)$/i.test(w)) return true;
     }
 
